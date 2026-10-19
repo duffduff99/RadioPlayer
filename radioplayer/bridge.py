@@ -215,6 +215,8 @@ class Bridge:
                     self.rescan()
         except (EngineError, ValueError) as e:
             log.error("Command %s failed: %s", topic, e)
+        except Exception:
+            log.exception("Command %s failed", topic)
 
     # --- actions ------------------------------------------------------------
 
@@ -275,13 +277,19 @@ class Bridge:
         self.client.loop_start()
         try:
             while not self.stop.is_set():
-                self.poll_once()
+                try:
+                    self.poll_once()
+                except Exception:
+                    log.exception("Status poll failed")
                 self.stop.wait(float(m["poll_seconds"]))
         except KeyboardInterrupt:
             pass
         finally:
             log.info("Shutting down")
-            self.client.publish(self.t("availability"), "offline", qos=1, retain=True).wait_for_publish(timeout=3)
+            try:
+                self.client.publish(self.t("availability"), "offline", qos=1, retain=True).wait_for_publish(timeout=3)
+            except (RuntimeError, ValueError):
+                pass  # not connected; the broker's last-will marks us offline
             self.client.loop_stop()
             self.client.disconnect()
 
