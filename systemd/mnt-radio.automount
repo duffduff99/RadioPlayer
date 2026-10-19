@@ -1,0 +1,13 @@
+[Unit]
+Description=Automount music share for RadioPlayer
+After=network-online.target
+Wants=network-online.target
+
+[Automount]
+Where=/mnt/radio
+# Stay mounted; the automount retries the mount on next access if the
+# server was unreachable (e.g. at boot or after an outage).
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=multi-user.target

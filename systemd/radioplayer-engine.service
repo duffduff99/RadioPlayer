@@ -1,0 +1,28 @@
+[Unit]
+Description=RadioPlayer audio engine (Liquidsoap)
+Documentation=file:///opt/radioplayer/README.md
+After=network-online.target sound.target mnt-radio.automount
+Wants=network-online.target mnt-radio.automount
+# Never give up restarting: dead air is the one thing this must not do.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=radioplayer
+Group=radioplayer
+SupplementaryGroups=audio
+StateDirectory=radioplayer
+StateDirectoryMode=0750
+# Regenerate settings from config.yaml. The leading "-" means a broken
+# config does not stop the engine: it starts with the last good settings.
+ExecStartPre=-/opt/radioplayer/venv/bin/radioplayer generate
+ExecStart=/usr/bin/liquidsoap /opt/radioplayer/liquidsoap/radio.liq
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+# Audio should win over everything else on the box.
+Nice=-10
+IOSchedulingClass=realtime
+
+[Install]
+WantedBy=multi-user.target

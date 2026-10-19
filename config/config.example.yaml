@@ -1,0 +1,126 @@
+# RadioPlayer configuration: /etc/radioplayer/config.yaml
+#
+# After editing:
+#   sudo -u radioplayer /opt/radioplayer/venv/bin/radioplayer check   # validate
+#   sudo systemctl restart radioplayer-engine radioplayer-bridge
+# (Restarting the engine means a few seconds of silence on air.)
+
+music:
+  # Where the SMB share is mounted (see /etc/systemd/system/mnt-radio.mount).
+  root: /mnt/radio
+
+  # Every top-level folder on the share becomes a playlist automatically.
+  # Add a folder on the share, press "Rescan music library" in Home
+  # Assistant, and it appears in the playlist dropdown.
+  auto_playlists: true
+
+  # Top-level folders to NOT turn into playlists (case-insensitive).
+  exclude: []
+  #  - "#recycle"
+  #  - Station IDs
+
+  # Extra playlists made from one or more folders (relative to root, or
+  # absolute). With several folders, each song is picked from a random
+  # folder, so each folder gets an equal share of airtime regardless of size.
+  playlists: []
+  #  - name: Holiday Mix
+  #    folders: [Christmas, Winter]
+  #  - name: Oldies
+  #    folder: Decades/60s
+
+  # A playlist of the whole share. Set to null to hide it.
+  all_playlist_name: All Music
+
+  # Playlist to use on first start (afterwards the last selection is kept).
+  default_playlist: null
+
+  # If the selected playlist has nothing playable, play the whole share,
+  # then the local emergency folder below.
+  fallback_to_all: true
+
+  # Local copy of some music on the SD card, used when the share is down.
+  # Filled weekly by radioplayer-emergency.timer. Can also be filled by hand.
+  emergency_dir: /var/lib/radioplayer/emergency
+
+  # How often folders are re-read for added/removed files.
+  reload_minutes: 60
+
+  # Skip a song that contains this many seconds of silence (hidden tracks).
+  max_blank_seconds: 10
+
+output:
+  # alsa: sound card. (dummy / wav are for testing.)
+  type: alsa
+  # List devices with:  aplay -L | grep -A1 ^plughw
+  # Pi built-in 3.5 mm jack:   plughw:CARD=Headphones,DEV=0
+  # Typical USB DAC:           plughw:CARD=Device,DEV=0   (name varies)
+  device: "plughw:CARD=Headphones,DEV=0"
+
+  # Output level, in dB, set from Home Assistant. Applied after the limiter,
+  # so it never makes peaks louder than the ceiling.
+  default_volume_db: -6.0
+  min_volume_db: -40.0
+  # Hard upper limit for the Home Assistant slider. Set this during
+  # calibration (see README) so nobody can overdrive the modulator.
+  max_volume_db: 0.0
+
+  # Highest sample level the processing will ever output (dBFS).
+  ceiling_db: -1.0
+
+  # Crossfade between songs (0 to disable).
+  crossfade_seconds: 2.0
+
+processing:
+  # full: 4-band compressor (Raspberry Pi 4/5).
+  # lite: single-band compressor, about 40% less CPU (Pi 2/3).
+  mode: full
+
+  # Preset on first start: flat, light, medium or heavy (or one of yours).
+  # Quote it if you name a preset "off"/"on"/"yes"/"no" (YAML reads those
+  # as true/false).
+  default_preset: medium
+
+  # Slow automatic gain control so quiet and loud recordings even out.
+  agc: true
+  agc_target_db: -16.0
+
+  # The ZFMSM passes 30 Hz - 15 kHz. Keep lowpass_hz at or below 15000 so
+  # nothing lands on the 19 kHz stereo pilot.
+  highpass_hz: 30.0
+  lowpass_hz: 15000.0
+
+  # Compressor band edges (Hz): low | low-mid | high-mid | high.
+  crossovers: [150.0, 800.0, 5000.0]
+
+  # Override or add presets. Values in dB except ratio. Bands are
+  # low, low-mid, high-mid, high. In lite mode only the low-mid band's
+  # settings are used, wide-band.
+  presets: {}
+  #  medium:
+  #    bass: 1.5
+  #  talk:
+  #    drive: 2.0
+  #    bass: 0.0
+  #    presence: 2.0
+  #    air: 0.0
+  #    bands:
+  #      - {threshold: -24, ratio: 3, gain: 3}
+  #      - {threshold: -24, ratio: 3, gain: 4}
+  #      - {threshold: -24, ratio: 3, gain: 4}
+  #      - {threshold: -28, ratio: 4, gain: 2}
+
+# Local control API used by the bridge and the CLI. Keep it on localhost.
+http:
+  bind: 127.0.0.1
+  port: 8005
+
+mqtt:
+  # Your Home Assistant MQTT broker (e.g. the Mosquitto add-on).
+  host: homeassistant.local
+  port: 1883
+  username: radioplayer
+  password: CHANGE_ME
+  tls: false
+  base_topic: radioplayer
+  discovery_prefix: homeassistant
+  device_name: FM Radio Player

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the local emergency music folder from the share
+After=network-online.target mnt-radio.automount
+Wants=mnt-radio.automount
+
+[Service]
+Type=oneshot
+User=radioplayer
+Group=radioplayer
+StateDirectory=radioplayer
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/opt/radioplayer/venv/bin/radioplayer refresh-emergency --max-mb 2000
