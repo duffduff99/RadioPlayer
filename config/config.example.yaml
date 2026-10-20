@@ -71,14 +71,21 @@ output:
   crossfade_seconds: 2.0
 
 processing:
-  # full: 4-band compressor (Raspberry Pi 4/5).
-  # lite: single-band compressor, about 40% less CPU (Pi 2/3).
+  # full: 4-band compressor (Pi 3B and newer).
+  # lite: single-band compressor, about 35% less CPU (Pi 2, or a busy Pi 3).
   mode: full
 
   # Preset on first start: flat, light, medium or heavy (or one of yours).
   # Quote it if you name a preset "off"/"on"/"yes"/"no" (YAML reads those
   # as true/false).
   default_preset: medium
+
+  # Pre-emphasis protection: limit the audio as the transmitter will see it
+  # after its treble boost, so cymbals and "s" sounds can't over-deviate.
+  # 75 = Americas (standard for US FM), 50 = Europe/elsewhere, 0 = off.
+  # If unsure, leave 75: if the modulator turns out not to pre-emphasize,
+  # the only effect is slightly reined-in treble on the brightest moments.
+  preemphasis_us: 75
 
   # Slow automatic gain control so quiet and loud recordings even out.
   agc: true

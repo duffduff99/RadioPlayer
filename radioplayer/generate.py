@@ -107,6 +107,17 @@ def read_state(cfg: Config) -> dict:
     return state if isinstance(state, dict) else {}
 
 
+# Pre-emphasis curve -> (zero time constant in seconds, k) for the emphasis
+# filter in radio.liq. Fitted at 44.1 kHz so the one-pole discrete filter
+# tracks the analog 1 + jw*tau curve within 1 dB from 200 Hz to 15 kHz
+# (the plain values undershoot by ~2 dB near 15 kHz).
+EMPHASIS_FIT = {
+    0: (0.0, 0.0),
+    50: (47.7e-6, 80.0),
+    75: (76.7e-6, 80.0),
+}
+
+
 # --- Liquidsoap literal helpers ------------------------------------------
 
 def liq_str(s: str) -> str:
@@ -116,7 +127,11 @@ def liq_str(s: str) -> str:
 
 
 def liq_float(x) -> str:
-    return repr(float(x))
+    # Liquidsoap has no exponent notation (1e-05), so always write decimals.
+    text = repr(float(x))
+    if "e" in text or "E" in text:
+        text = f"{float(x):.12f}".rstrip("0")
+    return text if "." in text else text + ".0"
 
 
 def liq_bool(b) -> str:
@@ -177,6 +192,8 @@ def render(cfg: Config, playlists: list[Playlist], state: dict) -> str:
         f"rp_ceiling_db = {liq_float(out['ceiling_db'])}",
         f"rp_crossfade = {liq_float(out['crossfade_seconds'])}",
         f"rp_processing_mode = {liq_str(proc['mode'])}",
+        f"rp_emphasis_tau = {liq_float(EMPHASIS_FIT.get(proc['preemphasis_us'], (0.0, 0.0))[0])}",
+        f"rp_emphasis_k = {liq_float(EMPHASIS_FIT.get(proc['preemphasis_us'], (0.0, 0.0))[1])}",
         f"rp_agc = {liq_bool(proc['agc'])}",
         f"rp_agc_target = {liq_float(proc['agc_target_db'])}",
         f"rp_highpass_hz = {liq_float(proc['highpass_hz'])}",

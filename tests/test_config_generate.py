@@ -7,7 +7,8 @@ import yaml
 from radioplayer import config as config_mod
 from radioplayer.bridge import Bridge, is_fallback, now_playing
 from radioplayer.config import ConfigError
-from radioplayer.generate import _parse_generated_names, generate, render, resolve_playlists
+from radioplayer.generate import (EMPHASIS_FIT, _parse_generated_names, generate, liq_float, render,
+                                  resolve_playlists)
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "config" / "config.example.yaml"
 
@@ -79,6 +80,7 @@ def test_unreachable_share_uses_cache_then_all(tmp_path, library):
     ({"processing": {"crossovers": [800, 150, 5000]}}, "crossovers"),
     ({"processing": {"default_preset": False}}, "default_preset"),
     ({"processing": {"mode": "turbo"}}, "processing.mode"),
+    ({"processing": {"preemphasis_us": 60}}, "preemphasis_us"),
     ({"processing": {"presets": {"x": {"bands": []}}}}, "bands"),
     ({"processing": {"presets": {"x": {"limiter_drive": 20}}}}, "limiter_drive"),
     ({"music": {"playlists": [{"name": "A #{x}", "folder": "a"}]}}, "unsupported"),
@@ -144,3 +146,33 @@ def test_discovery_payloads(tmp_path):
     assert len(ids) == len(set(ids))
     # Must be serialisable.
     json.dumps(payloads)
+
+
+def test_liq_float_never_uses_exponents():
+    for v, want in [(7.67e-05, "0.0000767"), (0, "0.0"), (-24, "-24.0"), (15000.0, "15000.0"), (-1.5, "-1.5")]:
+        assert liq_float(v) == want
+
+
+@pytest.mark.parametrize("us", [0, 50, 75])
+def test_preemphasis_rendered(tmp_path, library, us):
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "processing": {"preemphasis_us": us}})
+    text = render(cfg, resolve_playlists(cfg), {})
+    tau, k = EMPHASIS_FIT[us]
+    assert f"rp_emphasis_tau = {liq_float(tau)}" in text
+    assert f"rp_emphasis_k = {liq_float(k)}" in text
+    assert "e-" not in text.split("rp_emphasis_tau = ")[1].split("\n")[0]
+
+
+def test_emphasis_fit_tracks_analog_curve():
+    """The discrete emphasis filter in radio.liq is within 1 dB of 1 + jw*tau."""
+    import numpy as np
+    sr, dt = 44100, 1 / 44100
+    f = np.linspace(200, 15000, 300)
+    z = np.exp(1j * 2 * np.pi * f / sr)
+    for us in (50, 75):
+        tau_z, k = EMPHASIS_FIT[us]
+        a = dt / (tau_z / (1 + k) + dt)
+        lp = a / (1 - (1 - a) / z)
+        got = 20 * np.log10(abs((1 + k) - k * lp))
+        want = 20 * np.log10(abs(1 + 1j * 2 * np.pi * f * us * 1e-6))
+        assert np.max(abs(got - want)) < 1.0

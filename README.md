@@ -14,8 +14,9 @@ processes the audio for FM, and is controlled from Home Assistant.
   engine if the output ever goes dead while music is coming in, and systemd
   restarts anything that crashes.
 - **FM processing:** slow AGC, EQ, 4-band compressor, limiter, 15 kHz
-  low-pass (protects the 19 kHz stereo pilot), and a hard ceiling no sample
-  can exceed.
+  low-pass (protects the 19 kHz stereo pilot), pre-emphasis protection so
+  bright songs don't over-deviate the transmitter, and a hard ceiling no
+  sample can exceed.
 - **Output level control** that cannot overdrive the modulator. The level
   is applied after the limiter and capped at a maximum you set.
 
@@ -39,26 +40,26 @@ Measured on a 2.1 GHz Xeon core with the settings shipped here:
 
 | Processing mode | Liquidsoap 2.3.2 | Liquidsoap 2.2.4 |
 |---|---|---|
-| `full` (4-band) | 12.8 % of one core | 13.4 % |
-| `lite` (1-band) | 6.5 % | ~8 % |
+| `full` (4-band) | 10.4 % of one core | 14 % |
+| `lite` (1-band) | 6.7 % | 10 % |
+
+Raspberry Pi OS Trixie ships 2.3.2, the faster one.
 
 I could not test on Pi hardware. As a rough guide, a Pi core is around 2.5–3×
-slower than that Xeon on a Pi 4, around 5× on a Pi 3, and around 7–10× on a
+slower than that Xeon on a Pi 4, around 5–6× on a Pi 3, and around 7–10× on a
 Pi 2. That suggests:
 
 | Board | Expectation |
 |---|---|
-| **Pi 4 (2 GB+) — recommended** | `full` comfortably (~35–40 % of a core) |
-| Pi 5 | `full`, lots of headroom |
-| Pi 3B/3B+ | `full` probably works but is tight; `lite` is safe |
-| Pi 2 | Use `lite`. `full` probably cannot keep up. Even `lite` is unproven. |
+| Pi 4 / Pi 5 | `full` comfortably |
+| **Pi 3B / 3B+** | `full` should fit (~50–65 % of a core); `lite` (~35–40 %) if it stutters |
+| Pi 2 | Use `lite` (~50–70 %). `full` probably cannot keep up. |
 
+**On a Pi 3B (including Rev 1.2), use 64-bit Raspberry Pi OS Lite (Trixie).**
 Check on your board: `top -p $(pgrep liquidsoap)`. Sustained use near 100 %
 of a core means audio dropouts; switch `processing.mode` to `lite`.
 
-Other reasons to move off the Pi 2: 64-bit Raspberry Pi OS needs a Pi 3 or
-newer (or the rare Pi 2 v1.2), and the Pi 4 has much faster Ethernet for the
-SMB share. The Pi 2's 1 GB of RAM is fine; the engine uses about 170 MB.
+The engine uses about 170 MB of RAM, so 1 GB boards are fine.
 
 ### Audio output
 
@@ -229,34 +230,70 @@ Order of the chain, and why each stage is there:
 5. **Limiter** (`limiter_drive` pushes into it, which is what makes "heavy"
    louder), then a **clip** at ceiling −1 dB.
 6. **8th-order low-pass at 15 kHz**, after the clip so clip distortion is
-   filtered too. Measured: −3 dB at 15 kHz, **−62 dB at 19 kHz**.
-7. **Safety clip** at `ceiling_db`. Nothing louder reaches the DAC.
-8. **Output level** (the Home Assistant slider), ≤ `max_volume_db`.
+   filtered too.
+7. **Pre-emphasis protection** (`preemphasis_us`, see below): the audio is
+   treble-boosted exactly as the transmitter will boost it, limited and
+   clipped there, then the boost is undone, followed by a second 15 kHz
+   low-pass. Overall: −5.5 dB at 15 kHz, **−100 dB at 19 kHz**.
+8. **Safety clip** at `ceiling_db`. Nothing louder reaches the DAC.
+9. **Output level** (the Home Assistant slider), ≤ `max_volume_db`.
+
+Controls react within about a second: the engine keeps two 0.5 s buffers
+inside the chain, which cuts its CPU use by about 5×.
 
 Measured output on synthetic music-like test material (RMS; higher is louder):
 
 | Preset | full | lite |
 |---|---|---|
-| flat | −17.6 dBFS | −17.6 |
-| light | −17.1 | −16.6 |
-| medium | −15.5 | −15.1 |
-| heavy | −14.2 | −13.6 |
+| flat | −18.5 dBFS | −18.5 |
+| light | −17.9 | −17.5 |
+| medium | −16.4 | −15.8 |
+| heavy | −15.1 | −14.5 |
 
-In every test the peaks stayed ≤ −1.00 dBFS.
+In every test the peaks stayed ≤ −1.00 dBFS (with pre-emphasis protection
+on, music peaks land around −2 dBFS).
 
 Presets live in `config.yaml` under `processing.presets`. Override any value
 or add your own. This is lighter-touch than a commercial station's processor
 (heavy is around 13 dB crest factor, where commercial FM often runs 8–10),
 on purpose: it's tuned not to pump or distort.
 
-**Pre-emphasis, an honest caveat.** US FM uses 75 µs pre-emphasis (+17 dB
-at 15 kHz). The ZFMSM spec sheet doesn't say whether it applies it
-internally; most CATV modulators do. If it does, bright material can
-over-deviate even though the input level is controlled. The high band is
-therefore compressed harder than the others. That is an approximation, not
-a true pre-emphasis-aware limiter like a commercial processor's. If you
-need more, Liquidsoap can host [Stereo Tool](https://www.stereotool.com/)
-(free for non-commercial use, has Pi builds), which does this properly.
+### Pre-emphasis (why bright songs clip on FM)
+
+Every FM radio applies **de-emphasis**, a treble cut (75 µs in the Americas:
+−10 dB at 5 kHz, −17 dB at 15 kHz). To compensate, the transmitter boosts
+treble by the same amount before modulating (**pre-emphasis**). The ZFMSM spec
+sheet doesn't mention it, but you can tell by ear: if music through it sounds
+normally bright on an ordinary radio, the modulator is pre-emphasizing.
+Without pre-emphasis, everything would sound clearly muffled.
+
+That boost is why a player that only watches its own output level (VolumIO,
+for example) can still over-deviate the transmitter. Its −1 dBFS peaks become
+up to +17 dB on cymbals and "s" sounds by the time they reach the modulator's
+FM stage. Measured on test material with protection off, peaks after a
+simulated 75 µs pre-emphasis reached **+5 to +16.5 dB over full scale**.
+
+With `preemphasis_us: 75` (the default), the processor applies the same
+boost internally, limits and clips the boosted signal just under the
+ceiling, then exactly undoes the boost. At low levels this is transparent
+(±0.6 dB to 14 kHz). On loud, bright material, after simulated pre-emphasis
+(the calibration tone, i.e. 100 % modulation, sits at −1 dBFS):
+
+| Test material | 99.9 % of samples, off | 99.9 %, protected |
+|---|---|---|
+| hot pink noise | +3.0 dBFS | +0.6 dBFS |
+| music-like (bright hi-hats) | +6.8 dBFS | +0.5 dBFS |
+| loud white noise (extreme) | +4.2 dBFS | +1.3 dBFS |
+
+So treble overs drop from 4–8 dB above 100 % to about 1.5–2 dB, briefly. I
+could squeeze that to 0 dB, but only by limiting bass too, which costs about
+1.5 dB of loudness and audibly clips kick drums. I chose the middle ground.
+The real modulator's curve is only approximately known anyway. The cost is
+slightly reined-in treble on the brightest moments, as on any commercial FM
+station. If your modulator turns out not to pre-emphasize, set
+`preemphasis_us: 0`. If you want broadcast-grade processing beyond this,
+Liquidsoap 2.3 can host [Stereo Tool](https://www.stereotool.com/) (free for
+non-commercial use).
 
 ---
 
@@ -315,6 +352,9 @@ returns, the watchdog, frequency response, peak ceiling, CPU use, MQTT
 discovery and commands against a local Mosquitto broker, and ALSA output
 (via ALSA's null device). `pytest` covers the config, generator and bridge,
 and boots the real engine.
+
+Pre-emphasis protection was measured by applying an analog-model 75 µs
+pre-emphasis to the engine's output.
 
 **Not tested:** a real Raspberry Pi (CPU numbers are estimates), a real SMB
 server (outages were simulated by removing the folder; a hung server is

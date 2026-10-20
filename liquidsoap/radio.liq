@@ -123,6 +123,16 @@ end
 # and the local emergency folder failed.
 music = mksafe(music)
 
+# Cut the source graph here and after the multiband compressor. Every frame
+# Liquidsoap checks readiness by walking the whole graph, and the multiband
+# split makes each walk revisit everything upstream once per branch; without
+# these buffers the full chain costs ~5x more CPU (measured: 72% -> 14% of a
+# core). Each adds 0.5 s of latency, which only delays controls slightly.
+def graph_cut(s) =
+  mksafe(buffer(buffer=0.5, s))
+end
+music = graph_cut(music)
+
 # --------------------------------------------------------------------------
 # Processing chain (parameters are refs so presets can change them live)
 # --------------------------------------------------------------------------
@@ -237,6 +247,7 @@ def lite_chain(s) =
 end
 
 s = if rp_processing_mode == "lite" then lite_chain(s) else full_chain(s) end
+s = graph_cut(s)
 
 ceiling = lin_of_dB(rp_ceiling_db)
 
@@ -256,6 +267,43 @@ s = clip_at(lin_of_dB(rp_ceiling_db - 1.), s)
 #    (the modulator passes 15 kHz). Low-passing after the clip is why this
 #    comes here and not earlier.
 s = lp8(rp_lowpass_hz, s)
+
+# 7b. Pre-emphasis protection. FM transmitters boost treble before modulating
+#     (75 us in the US: +17 dB at 15 kHz), so bright material can over-deviate
+#     even when the input level is fine. Limit the signal as the transmitter
+#     will see it: apply the same emphasis, limit, then exactly undo it.
+#
+#     Built from one-pole low-passes (filter.rc; its rc is 1/frequency, and
+#     its output is wetness*LP(x) + (1-wetness)*x):
+#       emphasis    P(x) = (1+k)x - k*LP(tau_p)(x)   wetness -k, zero at tau_z
+#       de-emphasis D(x) = x/(1+k) + k/(1+k)*LP(tau_z)(x)   exactly 1/P
+#     with tau_p = tau_z/(1+k). rp_emphasis_tau/k are fitted (in generate.py)
+#     so P is within 1 dB of the real curve from 200 Hz to 15 kHz.
+#     (Mixing x with LP(x) via add() instead costs ~40% of a CPU core here.)
+def emphasis(s) =
+  k = rp_emphasis_k
+  filter.rc(frequency=(1. + k) / rp_emphasis_tau, mode="low", wetness=0. - k, s)
+end
+
+def deemphasis(s) =
+  k = rp_emphasis_k
+  filter.rc(frequency=1. / rp_emphasis_tau, mode="low", wetness=k / (1. + k), s)
+end
+
+#     The limiter handles sustained treble; the clip catches fast transients
+#     (cymbals, "s" sounds) it is too slow for. De-emphasis then turns down
+#     the clip's distortion, and a second low-pass keeps it off the pilot.
+s = if rp_emphasis_tau > 0. then
+  e = emphasis(s)
+  # Emphasis leaves bass at ~unity gain, so these levels also cap bass: just
+  # under the main ceiling keeps nearly all of its headroom. Treble peaks can
+  # overshoot by ~1 dB after de-emphasis and the low-pass.
+  e = compress(attack=0.5, release=40., knee=1., ratio=20., threshold=rp_ceiling_db - 1.5, e)
+  e = clip_at(lin_of_dB(rp_ceiling_db - 0.5), e)
+  lp8(rp_lowpass_hz, deemphasis(e))
+else
+  s
+end
 
 # Pre-clip meter for the watchdog (the clip would hide a NaN as silence).
 s = peak(id="meter_out", duration=1., s)

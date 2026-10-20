@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "numpy"]
 
 [project.scripts]
 radioplayer = "radioplayer.__main__:main"

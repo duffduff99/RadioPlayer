@@ -88,6 +88,7 @@ DEFAULTS: dict[str, Any] = {
     "processing": {
         "mode": "full",
         "default_preset": "medium",
+        "preemphasis_us": 75,
         "agc": True,
         "agc_target_db": -16.0,
         "highpass_hz": 30.0,
@@ -226,6 +227,8 @@ def load(path: Path | str | None = None) -> Config:
         raise ConfigError("output.ceiling_db must be between -20 and 0")
 
     proc = raw["processing"]
+    if proc["preemphasis_us"] not in (0, 50, 75):
+        raise ConfigError("processing.preemphasis_us must be 75 (Americas), 50 (Europe/elsewhere) or 0 (off)")
     if proc["mode"] not in ("full", "lite"):
         raise ConfigError("processing.mode must be 'full' or 'lite'")
     xo = proc["crossovers"]
