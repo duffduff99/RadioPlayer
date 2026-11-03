@@ -66,6 +66,8 @@ DEFAULTS: dict[str, Any] = {
     "music": {
         "root": "/mnt/radio",
         "emergency_dir": "/var/lib/radioplayer/emergency",
+        "emergency_refresh_days": 7,
+        "emergency_max_mb": 2000,
         "auto_playlists": True,
         "all_playlist_name": "All Music",
         "exclude": [],
@@ -111,7 +113,6 @@ DEFAULTS: dict[str, Any] = {
     },
     "paths": {
         "state_dir": "/var/lib/radioplayer",
-        "engine_service": "radioplayer-engine.service",
     },
 }
 

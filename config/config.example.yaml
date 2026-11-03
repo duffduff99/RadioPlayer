@@ -1,9 +1,12 @@
-# RadioPlayer configuration: /etc/radioplayer/config.yaml
+# RadioPlayer configuration.
+#   Docker:  config.yaml next to compose.yaml
+#   Native:  /etc/radioplayer/config.yaml
 #
-# After editing:
-#   sudo -u radioplayer /opt/radioplayer/venv/bin/radioplayer check   # validate
-#   sudo systemctl restart radioplayer-engine radioplayer-bridge
-# (Restarting the engine means a few seconds of silence on air.)
+# After editing, validate and restart (a few seconds of silence on air):
+#   Docker:  docker compose run --rm engine radioplayer check
+#            docker compose restart
+#   Native:  sudo -u radioplayer /opt/radioplayer/venv/bin/radioplayer check
+#            sudo systemctl restart radioplayer-engine radioplayer-bridge
 
 music:
   # Where the SMB share is mounted (see /etc/systemd/system/mnt-radio.mount).
@@ -39,8 +42,12 @@ music:
   fallback_to_all: true
 
   # Local copy of some music on the SD card, used when the share is down.
-  # Filled weekly by radioplayer-emergency.timer. Can also be filled by hand.
+  # Filled at first start, then refreshed with a new random selection every
+  # emergency_refresh_days (0 = never; fill it by hand instead). With a
+  # small library, raise emergency_max_mb so the whole library fits.
   emergency_dir: /var/lib/radioplayer/emergency
+  emergency_refresh_days: 7
+  emergency_max_mb: 2000
 
   # How often folders are re-read for added/removed files.
   reload_minutes: 60
@@ -53,7 +60,8 @@ output:
   type: alsa
   # List devices with:  aplay -L | grep -A1 ^plughw
   # Pi built-in 3.5 mm jack:   plughw:CARD=Headphones,DEV=0
-  # Typical USB DAC:           plughw:CARD=Device,DEV=0   (name varies)
+  # Typical USB DAC/dongle:    plughw:CARD=Device,DEV=0   (name varies)
+  # (With Docker, run `aplay -L` on the host.)
   device: "plughw:CARD=Headphones,DEV=0"
 
   # Output level, in dB, set from Home Assistant. Applied after the limiter,

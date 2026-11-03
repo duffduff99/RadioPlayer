@@ -221,32 +221,3 @@ def generate(cfg: Config, use_scan: bool = True) -> list[Playlist]:
     tmp.replace(target)
     log.info("Wrote %s with %d playlists: %s", target, len(playlists), ", ".join(p.name for p in playlists))
     return playlists
-
-
-def generated_playlist_names(cfg: Config) -> list[str]:
-    """Playlist names in the currently generated file (for change detection)."""
-    try:
-        text = cfg.generated_liq.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    return [p.name for p in _parse_generated_names(text)]
-
-
-def _parse_generated_names(text: str) -> list[Playlist]:
-    out = []
-    inside = False
-    for line in text.splitlines():
-        if line.startswith("rp_playlists = ["):
-            inside = True
-            continue
-        if inside:
-            if line.strip() == "]":
-                break
-            # Lines look like:  ("Name", ["/path", ...]),
-            body = line.strip().rstrip(",")
-            try:
-                name, folders = json.loads("[" + body[1:-1] + "]")
-                out.append(Playlist(name, folders))
-            except ValueError:
-                continue
-    return out

@@ -328,7 +328,8 @@ s = amplify({lin_of_dB(volume_db())}, s)
 
 # --------------------------------------------------------------------------
 # Watchdog: if the processing chain ever produces NaN, or goes silent while
-# music is coming in, exit so systemd restarts the engine.
+# music is coming in, exit so the supervisor (systemd or Docker) restarts
+# the engine.
 # --------------------------------------------------------------------------
 
 dead_seconds = ref(0)
@@ -478,6 +479,15 @@ def h_reload(_) =
   json_response(status_json())
 end
 
+# Exit so the supervisor (systemd or Docker) restarts the engine, which
+# regenerates its settings from config.yaml on the way up. Used by "Rescan
+# music library" when folders were added or removed.
+def h_restart(_) =
+  log.important(label="radioplayer", "Restart requested")
+  thread.run(delay=0.5, fun () -> shutdown(code=0))
+  json_response(status_json())
+end
+
 def h_tone(req) =
   on = list.assoc(default="", "on", req.query)
   tone_on := (on == "1" or on == "true" or on == "on")
@@ -492,3 +502,4 @@ harbor.http.register.simple(port=rp_http_port, method="POST", "/volume", h_volum
 harbor.http.register.simple(port=rp_http_port, method="POST", "/preset", h_preset)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/tone", h_tone)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/reload", h_reload)
+harbor.http.register.simple(port=rp_http_port, method="POST", "/restart", h_restart)

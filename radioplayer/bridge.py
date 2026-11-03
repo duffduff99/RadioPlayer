@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import signal
-import subprocess
 import threading
 import time
-from pathlib import PurePath
+from pathlib import Path, PurePath
 
 import paho.mqtt.client as mqtt
 
 from . import __version__
 from .config import Config
 from .engine import Engine, EngineError
-from .generate import generate, generated_playlist_names
+from . import emergency
+from .generate import resolve_playlists
 
 log = logging.getLogger(__name__)
 
@@ -222,16 +222,37 @@ class Bridge:
 
     def rescan(self) -> None:
         """Pick up new files now; restart the engine only if folders changed."""
-        before = generated_playlist_names(self.cfg)
-        playlists = generate(self.cfg)
-        after = [p.name for p in playlists]
-        if after != before:
+        wanted = [p.name for p in resolve_playlists(self.cfg)]
+        current = (self.status or self.engine.status()).get("playlists") or []
+        if wanted != current:
             log.warning("Playlist set changed (%s -> %s); restarting engine. Expect a few seconds of silence.",
-                        before, after)
-            service = self.cfg["paths"]["engine_service"]
-            subprocess.run(["sudo", "-n", "systemctl", "restart", service], check=False, timeout=60)
+                        current, wanted)
+            self.engine.restart()
         else:
             self._update(self.engine.reload())
+
+    def emergency_loop(self) -> None:
+        """Refresh the local emergency folder every refresh_days (and at once if empty)."""
+        music = self.cfg["music"]
+        days = float(music["emergency_refresh_days"])
+        if days <= 0:
+            return
+        stamp = self.cfg.state_dir / "emergency.stamp"
+        while not self.stop.is_set():
+            try:
+                age = time.time() - stamp.stat().st_mtime
+            except OSError:
+                age = float("inf")
+            folder = Path(music["emergency_dir"])
+            empty = not folder.is_dir() or not any(folder.iterdir())
+            if empty or age >= days * 86400:
+                try:
+                    if emergency.refresh(self.cfg, int(music["emergency_max_mb"])) > 0:
+                        stamp.touch()
+                except Exception:
+                    log.exception("Emergency folder refresh failed")
+            # Check again in an hour (retries soon after a failed refresh).
+            self.stop.wait(3600)
 
     # --- state --------------------------------------------------------------
 
@@ -275,6 +296,7 @@ class Bridge:
         signal.signal(signal.SIGTERM, lambda *_: self.stop.set())
         self.client.connect_async(m["host"], int(m["port"]), keepalive=30)
         self.client.loop_start()
+        threading.Thread(target=self.emergency_loop, name="emergency", daemon=True).start()
         try:
             while not self.stop.is_set():
                 try:

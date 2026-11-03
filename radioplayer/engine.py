@@ -56,5 +56,8 @@ class Engine:
     def reload(self) -> dict:
         return self._request("POST", "/reload")
 
+    def restart(self) -> dict:
+        return self._request("POST", "/restart")
+
     def tone(self, on: bool) -> dict:
         return self._request("POST", "/tone", on="1" if on else "0")

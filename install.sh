@@ -87,30 +87,26 @@ fi
 install -d /mnt/radio
 install -m 0644 "$PREFIX/systemd/mnt-radio.automount" /etc/systemd/system/
 
-say "Allowing the bridge to restart the engine (for 'Rescan music library')"
-cat > /etc/sudoers.d/radioplayer <<EOF
-$USER_NAME ALL=(root) NOPASSWD: /usr/bin/systemctl restart radioplayer-engine.service
-EOF
-chmod 0440 /etc/sudoers.d/radioplayer
-visudo -cf /etc/sudoers.d/radioplayer >/dev/null || { rm -f /etc/sudoers.d/radioplayer; die "sudoers check failed"; }
+# Older versions used a sudoers rule and a timer; both are now handled by the
+# engine and bridge themselves.
+rm -f /etc/sudoers.d/radioplayer
+if systemctl list-unit-files radioplayer-emergency.timer >/dev/null 2>&1; then
+  systemctl disable --now radioplayer-emergency.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/radioplayer-emergency.timer /etc/systemd/system/radioplayer-emergency.service
+fi
 
 say "Installing services"
-for unit in radioplayer-engine.service radioplayer-bridge.service \
-            radioplayer-emergency.service radioplayer-emergency.timer; do
+for unit in radioplayer-engine.service radioplayer-bridge.service; do
   install -m 0644 "$PREFIX/systemd/$unit" /etc/systemd/system/
 done
 systemctl daemon-reload
 systemctl enable --now mnt-radio.automount
-systemctl enable radioplayer-engine.service radioplayer-bridge.service radioplayer-emergency.timer
+systemctl enable radioplayer-engine.service radioplayer-bridge.service
 
 say "Checking the share"
 if timeout 30 ls /mnt/radio >/dev/null 2>&1; then
   echo "Share mounted. Playlists:"
   sudo -u "$USER_NAME" "$PREFIX/venv/bin/radioplayer" check || true
-  if [ -z "$(ls -A "$STATE/emergency" 2>/dev/null)" ]; then
-    say "Filling the emergency folder (copies ~2 GB, runs in the background)"
-    systemctl start --no-block radioplayer-emergency.service
-  fi
 else
   echo "WARNING: could not list /mnt/radio. Check: systemctl status mnt-radio.mount"
   echo "The player will still run from the emergency folder (if it has music)."

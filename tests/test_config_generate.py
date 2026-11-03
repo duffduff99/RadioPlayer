@@ -7,8 +7,7 @@ import yaml
 from radioplayer import config as config_mod
 from radioplayer.bridge import Bridge, is_fallback, now_playing
 from radioplayer.config import ConfigError
-from radioplayer.generate import (EMPHASIS_FIT, _parse_generated_names, generate, liq_float, render,
-                                  resolve_playlists)
+from radioplayer.generate import EMPHASIS_FIT, generate, liq_float, liq_str, render, resolve_playlists
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "config" / "config.example.yaml"
 
@@ -112,13 +111,14 @@ def test_render_uses_state_and_clamps(tmp_path, library):
     assert 'rp_initial_preset = "medium"' in text
 
 
-def test_generated_names_roundtrip(tmp_path, library):
+def test_generated_names_are_escaped(tmp_path, library):
     (library / 'Quote "This" \\ Folder').mkdir()
     cfg = write_config(tmp_path, base(tmp_path, library))
     pls = generate(cfg)
-    parsed = _parse_generated_names(cfg.generated_liq.read_text())
-    assert [p.name for p in parsed] == [p.name for p in pls]
-    assert [p.folders for p in parsed] == [p.folders for p in pls]
+    text = cfg.generated_liq.read_text()
+    for p in pls:
+        assert liq_str(p.name) in text
+    assert '"Quote \\"This\\" \\\\ Folder"' in text
 
 
 def test_now_playing_and_fallback():

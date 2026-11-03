@@ -84,9 +84,88 @@ cable.
 
 ## 2. Install
 
-Use **Raspberry Pi OS Lite based on Debian 13 "Trixie"** (64-bit on a
-Pi 3/4/5). It ships Liquidsoap 2.3.2. Bookworm ships Liquidsoap 2.1.3, which
-is too old, and the installer refuses it.
+Two ways to install, with the same features:
+
+- **Docker (recommended).** Works on any Linux machine with Docker: a
+  Raspberry Pi (any OS release), a NUC, a VM with a USB audio device. The
+  host OS's own Liquidsoap version doesn't matter.
+- **Native** (`install.sh`): runs directly under systemd. Needs Raspberry Pi
+  OS / Debian 13 "Trixie", whose Liquidsoap is new enough.
+
+On a Pi 3B or newer, use **64-bit Raspberry Pi OS Lite** either way.
+
+### Option A: Docker
+
+**1. Install Docker** (once):
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER      # log out and back in afterwards
+```
+
+**2. Mount the music share on the host.** Docker deliberately doesn't mount
+it itself. If the SMB server were down at boot, a Docker-mounted share would
+stop the engine container from starting at all, and there'd be no emergency
+music. Mounted on the host, the engine always starts and plays from the
+emergency folder until the share is back.
+
+```bash
+sudo apt install -y cifs-utils
+sudo install -d /mnt/radio
+printf 'username=YOUR_USER\npassword=YOUR_PASSWORD\n' | sudo tee /etc/radioplayer-smb >/dev/null
+sudo chmod 600 /etc/radioplayer-smb
+echo '//NAS/Music /mnt/radio cifs credentials=/etc/radioplayer-smb,ro,vers=3.0,iocharset=utf8,file_mode=0444,dir_mode=0555,soft,echo_interval=10,actimeo=30,nofail,_netdev,x-systemd.automount 0 0' | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo systemctl restart remote-fs.target
+ls /mnt/radio                       # should list your folders
+```
+
+Replace `//NAS/Music` with your server and share. `soft` makes reads fail
+within seconds during an outage instead of hanging the player, and
+`x-systemd.automount` remounts automatically when the server is back.
+
+**3. Configure and start:**
+
+```bash
+git clone https://github.com/duffduff99/RadioPlayer.git
+cd RadioPlayer
+cp config/config.example.yaml config.yaml
+nano config.yaml                    # mqtt section and output.device at minimum
+aplay -L | grep -A1 ^plughw         # find your output device name
+docker compose up -d --build        # first build on a Pi 3B takes several minutes
+docker compose logs -f              # watch it start (Ctrl-C to stop watching)
+```
+
+Both containers (`engine` and `bridge`) restart automatically after a crash
+or reboot. Day to day:
+
+```bash
+docker compose exec engine radioplayer status      # or any command in section 8
+docker compose restart                             # after editing config.yaml
+git pull && docker compose up -d --build           # update
+```
+
+Settings, the last playlist/level/preset and the emergency music copy live
+in the Docker volume `radioplayer_state`, so they survive rebuilds.
+
+Docker notes:
+- The music folder is `/mnt/radio` by default. Use another host path with
+  `MUSIC_DIR=/path docker compose up -d`.
+- The share is passed in with `rslave` mount propagation, so the container
+  sees it when the host remounts it after an outage. This needs the host's
+  `/` to be a shared mount, which is the default on systemd systems
+  (Raspberry Pi OS, Debian, Ubuntu). If `docker compose up` says *"not a
+  shared or slave mount"*, run `sudo mount --make-rshared /`.
+- The engine reaches the sound card through `/dev/snd` as group 29, the
+  `audio` group on Debian, Raspberry Pi OS and Ubuntu. On other distros,
+  put the output of `getent group audio` into `group_add` in
+  `compose.yaml`.
+- To build on a different base image: `docker compose build --build-arg BASE=ubuntu:questing`.
+  The build refuses Liquidsoap older than 2.2.
+
+### Option B: Native install
+
+Needs Raspberry Pi OS / Debian 13 "Trixie" (Bookworm's Liquidsoap 2.1.3 is
+too old, and the installer refuses it).
 
 ```bash
 sudo apt install -y git
@@ -101,8 +180,6 @@ The installer asks for the SMB server, share, user and password. It then:
 - creates a `radioplayer` system user
 - mounts the share read-only at `/mnt/radio` (automount, retries after outages)
 - installs and starts `radioplayer-engine` and `radioplayer-bridge`
-- copies about 2 GB of random songs to the SD card as the emergency folder,
-  refreshed weekly
 
 Then edit **`/etc/radioplayer/config.yaml`**. At minimum set the `mqtt`
 section and `output.device`. Restart afterwards:
@@ -116,6 +193,13 @@ sudo systemctl restart radioplayer-engine radioplayer-bridge
 
 Re-running `./install.sh` after a `git pull` upgrades the code and keeps your
 config.
+
+### Both
+
+On first start the bridge copies a random ~2 GB of the library to the SD
+card as the emergency folder, and refreshes it weekly (`emergency_*` in
+the config). With a library of a few hundred songs, raise
+`emergency_max_mb` until the whole library fits.
 
 ---
 
@@ -190,7 +274,8 @@ loudest the program can ever get. **It goes out on air** while it's on.
    it connected).
 3. Start the tone and set the level to 0 dB:
    ```bash
-   R=/opt/radioplayer/venv/bin/radioplayer
+   R="docker compose exec engine radioplayer"   # Docker (run in the RadioPlayer folder)
+   R=/opt/radioplayer/venv/bin/radioplayer      # native install
    $R volume 0
    $R tone on
    ```
@@ -304,9 +389,9 @@ non-commercial use).
 | Selected playlist empty or unreadable | Plays the whole library (source `all`); "Playing fallback" turns on |
 | SMB server down or network lost | Soft mount fails reads within seconds instead of hanging; plays the **emergency folder** (local SD card) and returns automatically when the share is back |
 | Share down at boot | Automount retries on access; playlist list comes from cache |
-| Emergency folder also empty | Silence (the last resort); fill it with `radioplayer refresh-emergency` |
+| Emergency folder also empty | Silence (the last resort). The bridge fills it on first start; check the bridge log if it's empty |
 | Processing produces NaN/garbage, or output dead while input has audio | Watchdog restarts the engine within ~10 s |
-| Engine or bridge crash | systemd restarts it (no retry limit) |
+| Engine or bridge crash | systemd or Docker restarts it (no retry limit) |
 | Broken config.yaml | Engine keeps running on the last good settings |
 | Song with long silence (hidden tracks) | Skipped after 10 s of silence |
 
@@ -315,7 +400,8 @@ non-commercial use).
 ## 8. Command line
 
 ```bash
-R=/opt/radioplayer/venv/bin/radioplayer
+R="docker compose exec engine radioplayer"   # Docker
+R=/opt/radioplayer/venv/bin/radioplayer      # native
 $R status                 # what's playing (JSON)
 $R playlist "Holiday Mix"
 $R skip
@@ -324,24 +410,30 @@ $R preset heavy
 $R reload                 # re-read all folders now
 $R tone on|off            # calibration tone (ON AIR)
 $R check                  # validate config, list playlists
-sudo -u radioplayer $R refresh-emergency --max-mb 2000
-journalctl -u radioplayer-engine -u radioplayer-bridge -f
+$R refresh-emergency --max-mb 2000    # native: prefix with sudo -u radioplayer
+docker compose logs -f                                 # Docker logs
+journalctl -u radioplayer-engine -u radioplayer-bridge -f   # native logs
 ```
 
 ## 9. Troubleshooting
 
-- **No audio, engine running:** check `output.device` against
-  `aplay -L`, and `alsamixer` levels. Run
-  `journalctl -u radioplayer-engine -n 50`.
+Logs: `docker compose logs engine` / `docker compose logs bridge` (Docker),
+or `journalctl -u radioplayer-engine` / `-u radioplayer-bridge` (native).
+
+- **No audio, engine running:** check `output.device` against `aplay -L`
+  (run on the host), and `alsamixer` levels. Check the engine log.
 - **"Playing fallback" stays on:** `radioplayer status` shows `source`.
-  `emergency` means the share is unreachable (`systemctl status mnt-radio.mount`,
-  `ls /mnt/radio`); `all` means the selected folder has no playable files.
-- **HA entities unavailable:** check `journalctl -u radioplayer-bridge`
-  (broker address or credentials) and whether the engine is running.
+  `emergency` means the share is unreachable (`ls /mnt/radio` on the host);
+  `all` means the selected folder has no playable files.
+- **HA entities unavailable:** check the bridge log (broker address or
+  credentials) and whether the engine is running.
 - **Dropouts/stutter:** CPU (see section 1). Set `processing.mode: lite`.
-- **Changing SMB server or credentials:** edit
-  `/etc/systemd/system/mnt-radio.mount` and `/etc/radioplayer/smb-credentials`,
-  then `sudo systemctl daemon-reload && sudo systemctl restart mnt-radio.automount`.
+- **Changing SMB server or credentials:** Docker: edit the line in
+  `/etc/fstab` and `/etc/radioplayer-smb`, then
+  `sudo systemctl daemon-reload && sudo systemctl restart remote-fs.target`.
+  Native: edit `/etc/systemd/system/mnt-radio.mount` and
+  `/etc/radioplayer/smb-credentials`, then
+  `sudo systemctl daemon-reload && sudo systemctl restart mnt-radio.automount`.
 
 ## 10. What was and wasn't tested
 
@@ -355,6 +447,14 @@ and boots the real engine.
 
 Pre-emphasis protection was measured by applying an analog-model 75 µs
 pre-emphasis to the engine's output.
+
+The Docker setup was built and run with `compose.yaml` (on an Ubuntu 25.10
+base, which has the same Liquidsoap 2.3.2 as Trixie; Debian's mirrors weren't
+reachable from the test environment). Tested: both containers starting,
+health check, MQTT discovery and commands, the CLI via `docker compose
+exec`, Rescan restarting the engine with settings kept, the emergency folder
+filling on first start, and a host mount made after start appearing inside
+the container.
 
 **Not tested:** a real Raspberry Pi (CPU numbers are estimates), a real SMB
 server (outages were simulated by removing the folder; a hung server is
