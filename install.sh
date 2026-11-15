@@ -59,6 +59,9 @@ Use the Docker install instead (README, section 2, option A)." ;;
   esac
 fi
 
+say "Pre-building Liquidsoap's standard library cache (faster engine starts)"
+liquidsoap --cache-stdlib >/dev/null 2>&1 || echo "(cache not supported by this Liquidsoap; skipping)"
+
 say "Creating system user '$USER_NAME'"
 if ! id "$USER_NAME" >/dev/null 2>&1; then
   useradd --system --home-dir "$STATE" --no-create-home --shell /usr/sbin/nologin \

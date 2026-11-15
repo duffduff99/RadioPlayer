@@ -42,7 +42,7 @@ single-core speed is what matters. **Measured on a real Pi 3B** (Liquidsoap
 | `processing.mode` | What runs | Pi 3B, share of one core |
 |---|---|---|
 | `full` | AGC, EQ, 4-band compressor, limiter, protection | **~105% (measured): too slow, audio stutters** |
-| `lite` | AGC, bass/presence EQ, 1-band compressor, limiter, protection | ~65–70% (est.) |
+| `lite` | AGC, 3-band EQ, 1-band compressor, limiter, protection | ~65–70% (est.) |
 | `minimal` | limiter, 15 kHz filter, pre-emphasis protection, ceiling | ~55% (est.) |
 
 "Protection" means everything that keeps the transmitter safe: limiter,

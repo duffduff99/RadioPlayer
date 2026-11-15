@@ -128,8 +128,10 @@ music = mksafe(music)
 # split makes each walk revisit everything upstream once per branch; without
 # these buffers the full chain costs ~5x more CPU (measured: 72% -> 14% of a
 # core). Each adds 0.5 s of latency, which only delays controls slightly.
+# max caps the backlog: the default (10 s) lets a buffer fill up after the
+# engine has fallen behind, which then delays every skip by that much.
 def graph_cut(s) =
-  mksafe(buffer(buffer=0.5, s))
+  mksafe(buffer(buffer=0.5, max=1.5, s))
 end
 music = graph_cut(music)
 
@@ -237,11 +239,12 @@ def full_chain(s) =
 end
 
 # 2-5, "lite" mode for slower boards (e.g. Raspberry Pi 2/3): high-pass,
-# bass and presence EQ, one wide-band compressor (the preset's "wideband").
+# the same 3-band EQ, one wide-band compressor (the preset's "wideband").
 def lite_chain(s) =
   s = hp2(rp_highpass_hz, s)
   s = filter.iir.eq.peak(frequency=80., q=0.7, gain={p_bass()}, s)
   s = filter.iir.eq.peak(frequency=3000., q=1., gain={p_presence()}, s)
+  s = filter.iir.eq.peak(frequency=10000., q=0.8, gain={p_air()}, s)
   s = amplify({lin_of_dB(p_drive())}, s)
   band_comp(wide, 20., 250., s)
 end
@@ -377,7 +380,11 @@ def on_meta(m) =
     source = m["rp_source"]
   }
 end
-s.on_metadata(on_meta)
+# Read song info where the playlists hand songs over, not at the output: on
+# Liquidsoap 2.3 metadata doesn't reliably pass through the crossfade plus
+# the graph-cut buffers, which left "now playing" stuck on an old song. This
+# reports a song a second or two before it is heard.
+music_fallback.on_metadata(on_meta)
 
 # --------------------------------------------------------------------------
 # Output
