@@ -1,0 +1,17 @@
+[Unit]
+Description=RadioPlayer Home Assistant MQTT bridge
+After=network-online.target radioplayer-engine.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=radioplayer
+Group=radioplayer
+StateDirectory=radioplayer
+ExecStart=/opt/radioplayer/venv/bin/radioplayer bridge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

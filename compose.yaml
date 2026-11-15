@@ -1,0 +1,58 @@
+# RadioPlayer with Docker Compose. See "Install with Docker" in README.md.
+#
+#   cp config/config.example.yaml config.yaml   # then edit it
+#   docker compose up -d --build
+#
+# The SMB share is mounted on the host at /mnt/radio (or MUSIC_DIR), not by
+# Docker: if Docker mounted it and the server were down at boot, the engine
+# container could not start at all, and there would be no emergency music.
+
+x-radioplayer: &radioplayer
+  build: .
+  image: radioplayer:latest
+  restart: unless-stopped
+  # The engine's control API listens on 127.0.0.1; host networking lets the
+  # bridge (and the radioplayer CLI) reach it and the MQTT broker.
+  network_mode: host
+  volumes:
+    - ./config.yaml:/etc/radioplayer/config.yaml:ro
+    - state:/var/lib/radioplayer
+    - type: bind
+      source: ${MUSIC_DIR:-/mnt/radio}
+      target: /mnt/radio
+      read_only: true
+      bind:
+        create_host_path: true
+        # Lets the container see the share when the host (auto)mounts it
+        # after the container has started.
+        propagation: rslave
+
+services:
+  engine:
+    <<: *radioplayer
+    command: engine
+    devices:
+      - /dev/snd:/dev/snd
+    # Access to /dev/snd. If your host's audio group is not GID 29 (Debian,
+    # Raspberry Pi OS and Ubuntu all use 29), put the number from
+    # `getent group audio` here instead.
+    group_add:
+      - "29"
+    healthcheck:
+      test: ["CMD", "radioplayer", "status"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+    # Audio first: a bigger CPU share than the bridge when the Pi is busy.
+    cpu_shares: 2048
+
+  bridge:
+    <<: *radioplayer
+    command: bridge
+    depends_on:
+      - engine
+
+volumes:
+  # Settings, last playlist/level/preset, playlist cache and the emergency
+  # music copy.
+  state:

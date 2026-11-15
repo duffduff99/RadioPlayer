@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radioplayer"
+version = "1.0.0"
+description = "Always-on FM playout for a Raspberry Pi: SMB playlists, FM processing, Home Assistant control"
+requires-python = ">=3.9"
+dependencies = [
+    "paho-mqtt>=1.6",
+    "PyYAML>=5.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "numpy"]
+
+[project.scripts]
+radioplayer = "radioplayer.__main__:main"
+
+[tool.setuptools]
+packages = ["radioplayer"]

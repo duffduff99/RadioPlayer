@@ -1,0 +1,10 @@
+.git
+.gitignore
+.pytest_cache
+**/__pycache__
+tests
+docs
+systemd
+install.sh
+config.yaml
+*.md
