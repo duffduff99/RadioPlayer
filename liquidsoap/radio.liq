@@ -179,7 +179,7 @@ s = music
 #    up/down are time constants in seconds: rise slowly (no pumping), fall
 #    faster. Not reset per track, like a broadcast AGC. Below -40 dB (fades,
 #    silence) the gain is held so silence is not boosted.
-s = if rp_agc then
+s = if rp_agc and rp_processing_mode != "minimal" then
   normalize(target=rp_agc_target, up=10., down=1., window=1., gain_min=-10., gain_max=10.,
             threshold=-40., track_sensitive=false, s)
 else
@@ -246,7 +246,11 @@ def lite_chain(s) =
   band_comp(wide, 20., 250., s)
 end
 
-s = if rp_processing_mode == "lite" then lite_chain(s) else full_chain(s) end
+# "minimal" (for slow boards such as a Pi 3B): no AGC, EQ or compressor;
+# the limiter, low-pass, pre-emphasis protection and ceiling below still run.
+s = if rp_processing_mode == "lite" then lite_chain(s)
+    elsif rp_processing_mode == "minimal" then s
+    else full_chain(s) end
 s = graph_cut(s)
 
 ceiling = lin_of_dB(rp_ceiling_db)
@@ -380,7 +384,8 @@ s.on_metadata(on_meta)
 # --------------------------------------------------------------------------
 
 if rp_output == "alsa" then
-  output.alsa(id="out", device=rp_alsa_device, s)
+  # Defined in generated.liq: the right call for this Liquidsoap version.
+  rp_output_alsa(s)
 elsif rp_output == "wav" then
   # For testing and measurement: record exactly what would go to the DAC.
   output.file(id="out", %wav(stereo=true, samplesize=24), rp_output_file, s)

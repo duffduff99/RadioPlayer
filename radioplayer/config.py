@@ -81,6 +81,7 @@ DEFAULTS: dict[str, Any] = {
         "type": "alsa",
         "device": "plughw:CARD=Headphones,DEV=0",
         "file": "/var/lib/radioplayer/output.wav",
+        "alsa_buffer_seconds": 1.0,
         "default_volume_db": -6.0,
         "min_volume_db": -40.0,
         "max_volume_db": 0.0,
@@ -224,14 +225,16 @@ def load(path: Path | str | None = None) -> Config:
         raise ConfigError("output.min_volume_db must be below max_volume_db")
     if not out["min_volume_db"] <= out["default_volume_db"] <= out["max_volume_db"]:
         raise ConfigError("output.default_volume_db must be between min_volume_db and max_volume_db")
+    if not 0.2 <= out["alsa_buffer_seconds"] <= 5:
+        raise ConfigError("output.alsa_buffer_seconds must be between 0.2 and 5")
     if not -20 <= out["ceiling_db"] <= 0:
         raise ConfigError("output.ceiling_db must be between -20 and 0")
 
     proc = raw["processing"]
     if proc["preemphasis_us"] not in (0, 50, 75):
         raise ConfigError("processing.preemphasis_us must be 75 (Americas), 50 (Europe/elsewhere) or 0 (off)")
-    if proc["mode"] not in ("full", "lite"):
-        raise ConfigError("processing.mode must be 'full' or 'lite'")
+    if proc["mode"] not in ("full", "lite", "minimal"):
+        raise ConfigError("processing.mode must be 'full', 'lite' or 'minimal'")
     xo = proc["crossovers"]
     if len(xo) != 3 or not all(a < b for a, b in zip(xo, xo[1:])):
         raise ConfigError("processing.crossovers must be 3 increasing frequencies")

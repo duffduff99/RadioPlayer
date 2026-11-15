@@ -6,6 +6,8 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
+import subprocess
 from pathlib import Path
 
 from .config import Config, Playlist
@@ -138,7 +140,32 @@ def liq_bool(b) -> str:
     return "true" if b else "false"
 
 
-def render(cfg: Config, playlists: list[Playlist], state: dict) -> str:
+def liquidsoap_version() -> tuple[int, int] | None:
+    """(major, minor) of the installed liquidsoap, or None if unknown."""
+    try:
+        out = subprocess.run(["liquidsoap", "--version"], capture_output=True, text=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r"Liquidsoap (\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def alsa_output_def(cfg: Config, version: tuple[int, int] | None) -> str:
+    """The ALSA output call for this Liquidsoap version.
+
+    2.3+ sizes the sound card buffer to one frame (0.2 s here) unless told
+    otherwise, which leaves no margin and underruns on slow machines, so give
+    it a bigger buffer. 2.2 has no such parameter (it buffers by itself).
+    """
+    if version is not None and version < (2, 3):
+        call = 'output.alsa(id="out", device=rp_alsa_device, s)'
+    else:
+        call = 'output.alsa(id="out", device=rp_alsa_device, buffer_size=rp_alsa_buffer, s)'
+    return f"def rp_output_alsa(s) =\n  {call}\nend"
+
+
+def render(cfg: Config, playlists: list[Playlist], state: dict,
+           ls_version: tuple[int, int] | None = None) -> str:
     music, out, proc = cfg["music"], cfg["output"], cfg["processing"]
     presets = cfg.presets
     names = [p.name for p in playlists]
@@ -186,6 +213,7 @@ def render(cfg: Config, playlists: list[Playlist], state: dict) -> str:
         f"rp_output = {liq_str(out['type'])}",
         f"rp_alsa_device = {liq_str(out['device'])}",
         f"rp_output_file = {liq_str(out['file'])}",
+        f"rp_alsa_buffer = {liq_float(out['alsa_buffer_seconds'])}",
         f"rp_initial_volume_db = {liq_float(volume)}",
         f"rp_min_volume_db = {liq_float(out['min_volume_db'])}",
         f"rp_max_volume_db = {liq_float(out['max_volume_db'])}",
@@ -206,6 +234,7 @@ def render(cfg: Config, playlists: list[Playlist], state: dict) -> str:
         f"rp_http_bind = {liq_str(cfg['http']['bind'])}",
         f"rp_http_port = {int(cfg['http']['port'])}",
         f"rp_state_file = {liq_str(str(cfg.state_file))}",
+        alsa_output_def(cfg, ls_version),
         "",
     ]
     return "\n".join(lines)
@@ -213,7 +242,7 @@ def render(cfg: Config, playlists: list[Playlist], state: dict) -> str:
 
 def generate(cfg: Config, use_scan: bool = True) -> list[Playlist]:
     playlists = resolve_playlists(cfg, use_scan=use_scan)
-    text = render(cfg, playlists, read_state(cfg))
+    text = render(cfg, playlists, read_state(cfg), liquidsoap_version())
     target = cfg.generated_liq
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".tmp")

@@ -72,6 +72,10 @@ output:
   # calibration (see README) so nobody can overdrive the modulator.
   max_volume_db: 0.0
 
+  # Sound card buffer (Liquidsoap 2.3+). Raise it if the engine log shows
+  # "Underrun!" (crackles/dropouts); costs that much extra delay on controls.
+  alsa_buffer_seconds: 1.0
+
   # Highest sample level the processing will ever output (dBFS).
   ceiling_db: -1.0
 
@@ -79,9 +83,14 @@ output:
   crossfade_seconds: 2.0
 
 processing:
-  # full: 4-band compressor (Pi 3B and newer).
-  # lite: single-band compressor, about 35% less CPU (Pi 2, or a busy Pi 3).
-  mode: full
+  # How much processing to run. Measured share of one CPU core on a Pi 3B
+  # (Liquidsoap 2.3), approximately:
+  #   full     4-band compressor, AGC, EQ        ~105%  (too much; Pi 4/5 only)
+  #   lite     1-band compressor, AGC, bass/presence EQ   ~65-70%
+  #   minimal  no AGC/EQ/compressor; keeps limiter, filters,
+  #            pre-emphasis protection and ceiling          ~55%
+  # If the engine log shows "Underrun!" or "catchup", step down a mode.
+  mode: lite
 
   # Preset on first start: flat, light, medium or heavy (or one of yours).
   # Quote it if you name a preset "off"/"on"/"yes"/"no" (YAML reads those

@@ -35,29 +35,24 @@ processes the audio for FM, and is controlled from Home Assistant.
 
 ### Which Raspberry Pi
 
-The audio engine (Liquidsoap) runs its processing on a single CPU core.
-Measured on a 2.1 GHz Xeon core with the settings shipped here:
+The audio engine (Liquidsoap) runs its processing on a single CPU core, so
+single-core speed is what matters. **Measured on a real Pi 3B** (Liquidsoap
+2.3, Docker), plus estimates scaled from desktop measurements:
 
-| Processing mode | Liquidsoap 2.3.2 | Liquidsoap 2.2.4 |
+| `processing.mode` | What runs | Pi 3B, share of one core |
 |---|---|---|
-| `full` (4-band) | 10.4 % of one core | 14 % |
-| `lite` (1-band) | 6.7 % | 10 % |
+| `full` | AGC, EQ, 4-band compressor, limiter, protection | **~105% (measured): too slow, audio stutters** |
+| `lite` | AGC, bass/presence EQ, 1-band compressor, limiter, protection | ~65–70% (est.) |
+| `minimal` | limiter, 15 kHz filter, pre-emphasis protection, ceiling | ~55% (est.) |
 
-Raspberry Pi OS Trixie ships 2.3.2, the faster one.
+"Protection" means everything that keeps the transmitter safe: limiter,
+15 kHz low-pass, pre-emphasis protection and the hard ceiling. It's in every
+mode. A Pi 4 is roughly 2–3× faster per core than a Pi 3B and should run
+`full` comfortably; a Pi 5 more so.
 
-I could not test on Pi hardware. As a rough guide, a Pi core is around 2.5–3×
-slower than that Xeon on a Pi 4, around 5–6× on a Pi 3, and around 7–10× on a
-Pi 2. That suggests:
-
-| Board | Expectation |
-|---|---|
-| Pi 4 / Pi 5 | `full` comfortably |
-| **Pi 3B / 3B+** | `full` should fit (~50–65 % of a core); `lite` (~35–40 %) if it stutters |
-| Pi 2 | Use `lite` (~50–70 %). `full` probably cannot keep up. |
-
-**On a Pi 3B (including Rev 1.2), use 64-bit Raspberry Pi OS Lite (Trixie).**
-Check on your board: `top -p $(pgrep liquidsoap)`. Sustained use near 100 %
-of a core means audio dropouts; switch `processing.mode` to `lite`.
+If the engine log shows `Underrun!` or `catchup`, or the audio stutters,
+step down a mode. Check the load with `docker stats --no-stream` (Docker) or
+`top -p $(pgrep liquidsoap)` (native).
 
 The engine uses about 170 MB of RAM, so 1 GB boards are fine.
 
