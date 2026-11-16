@@ -32,6 +32,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("name")
     p = sub.add_parser("tone", help="400 Hz calibration tone at the output ceiling (ON AIR!)")
     p.add_argument("state", choices=["on", "off"])
+    p = sub.add_parser("signal", help="test signal: tone (same as 'tone on') or sweep, "
+                                      "stepped tones for measuring the transmitter (ON AIR!)")
+    p.add_argument("mode", choices=["off", "tone", "sweep"])
+    p = sub.add_parser("sync", help="update the local library mirror from the share now")
+    p.add_argument("--force", action="store_true", help="allow deleting more than half of the mirror")
     p = sub.add_parser("refresh-emergency", help="copy a random part of the library to the SD card")
     p.add_argument("--max-mb", type=int, default=2000)
 
@@ -61,6 +66,13 @@ def main(argv: list[str] | None = None) -> int:
         from .bridge import main as bridge_main
         bridge_main(cfg)
         return 0
+    if args.cmd == "sync":
+        from .mirror import sync
+        if not cfg.mirror_enabled:
+            print("music.mirror.enabled is false in the config", file=sys.stderr)
+            return 2
+        result = sync(cfg, force=args.force)
+        return 0 if result is not None else 1
     if args.cmd == "refresh-emergency":
         from .emergency import refresh
         return 0 if refresh(cfg, args.max_mb) > 0 else 1
@@ -80,7 +92,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "preset":
             result = engine.set_preset(args.name)
         elif args.cmd == "tone":
-            result = engine.tone(args.state == "on")
+            result = engine.signal("tone" if args.state == "on" else "off")
+        elif args.cmd == "signal":
+            result = engine.signal(args.mode)
         else:
             ap.error(f"unknown command {args.cmd}")
     except EngineError as e:

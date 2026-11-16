@@ -14,7 +14,7 @@ import paho.mqtt.client as mqtt
 from . import __version__
 from .config import Config
 from .engine import Engine, EngineError
-from . import emergency
+from . import emergency, mirror
 from .generate import resolve_playlists
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ class Bridge:
         self.discovered_options: tuple | None = None
         self.engine_online: bool | None = None
         self.mismatch_since: float | None = None
+        self.mirror_pending = False
         self.stop = threading.Event()
         self.lock = threading.Lock()
 
@@ -211,8 +212,12 @@ class Bridge:
                     self._update(self.engine.set_volume(float(payload)))
                 elif topic == self.t("skip/press"):
                     self._update(self.engine.skip())
-                elif topic == self.t("rescan/press"):
+                elif topic == self.t("rescan/press") and not self.cfg.mirror_enabled:
                     self.rescan()
+            if topic == self.t("rescan/press") and self.cfg.mirror_enabled:
+                # Outside the lock: a sync can take minutes and must not
+                # block status updates.
+                self.sync_mirror()
         except (EngineError, ValueError) as e:
             log.error("Command %s failed: %s", topic, e)
         except Exception:
@@ -230,6 +235,33 @@ class Bridge:
             self.engine.restart()
         else:
             self._update(self.engine.reload())
+
+    def sync_mirror(self) -> None:
+        """Update the local library mirror; apply changes to the engine."""
+        result = mirror.sync(self.cfg)
+        if result is not None and result.changed:
+            self.mirror_pending = True
+        self.apply_mirror_changes()
+
+    def apply_mirror_changes(self) -> None:
+        """Tell the engine about mirror changes; retried from the poll loop until it works."""
+        if not self.mirror_pending:
+            return
+        try:
+            with self.lock:
+                self.rescan()
+            self.mirror_pending = False
+        except EngineError as e:
+            log.debug("Mirror changed, engine not reachable yet: %s", e)
+
+    def mirror_loop(self) -> None:
+        interval = float(self.cfg["music"]["mirror"]["interval_minutes"]) * 60
+        while not self.stop.is_set():
+            try:
+                self.sync_mirror()
+            except Exception:
+                log.exception("Mirror sync failed")
+            self.stop.wait(interval)
 
     def emergency_loop(self) -> None:
         """Refresh the local emergency folder every refresh_days (and at once if empty)."""
@@ -290,13 +322,16 @@ class Bridge:
             return
         with self.lock:
             self._update(status)
+        self.apply_mirror_changes()
 
     def run(self) -> None:
         m = self.cfg["mqtt"]
         signal.signal(signal.SIGTERM, lambda *_: self.stop.set())
         self.client.connect_async(m["host"], int(m["port"]), keepalive=30)
         self.client.loop_start()
-        threading.Thread(target=self.emergency_loop, name="emergency", daemon=True).start()
+        # With a full local mirror there is nothing for an emergency copy to add.
+        background = self.mirror_loop if self.cfg.mirror_enabled else self.emergency_loop
+        threading.Thread(target=background, name="library", daemon=True).start()
         try:
             while not self.stop.is_set():
                 try:

@@ -41,6 +41,18 @@ music:
   # then the local emergency folder below.
   fallback_to_all: true
 
+  # Local mirror: copy the WHOLE share to local disk and always play from
+  # the copy. A NAS or network outage then has no effect on air. Recommended
+  # whenever the library fits on the local disk. The share is re-checked
+  # every interval_minutes and when "Rescan music library" is pressed; new
+  # and changed files are copied, files removed from the share are removed
+  # (never when the share is unreachable or looks mostly empty).
+  # With the mirror on, the emergency folder below is not used.
+  mirror:
+    enabled: false
+    dir: /var/lib/radioplayer/library
+    interval_minutes: 15
+
   # Local copy of some music on the SD card, used when the share is down.
   # Filled at first start, then refreshed with a new random selection every
   # emergency_refresh_days (0 = never; fill it by hand instead). With a
@@ -72,6 +84,11 @@ output:
   # calibration (see README) so nobody can overdrive the modulator.
   max_volume_db: 0.0
 
+  # Sound card buffer in seconds (Liquidsoap 2.3+). null = from the engine
+  # profile below (1.0 low-CPU, 0.25 otherwise). Raise it if the engine log
+  # shows "Underrun!" (crackles/dropouts); it delays controls by that much.
+  alsa_buffer_seconds: null
+
   # Highest sample level the processing will ever output (dBFS).
   ceiling_db: -1.0
 
@@ -79,9 +96,15 @@ output:
   crossfade_seconds: 2.0
 
 processing:
-  # full: 4-band compressor (Pi 3B and newer).
-  # lite: single-band compressor, about 35% less CPU (Pi 2, or a busy Pi 3).
-  mode: full
+  # How much processing to run. Measured share of one CPU core on a Pi 3B
+  # (Liquidsoap 2.3), approximately:
+  #   full     4-band compressor, AGC, EQ        ~105%  (too much; Pi 4/5 only)
+  #   lite     1-band compressor, AGC, EQ                 ~65-70%
+  #   minimal  no AGC/EQ/compressor; keeps limiter, filters,
+  #            pre-emphasis protection and ceiling          ~55%
+  # If the engine log shows "Underrun!" or "catchup", step down a mode.
+  # On a PC or server, use full.
+  mode: lite
 
   # Preset on first start: flat, light, medium or heavy (or one of yours).
   # Quote it if you name a preset "off"/"on"/"yes"/"no" (YAML reads those
@@ -107,12 +130,17 @@ processing:
   # Compressor band edges (Hz): low | low-mid | high-mid | high.
   crossovers: [150.0, 800.0, 5000.0]
 
-  # Override or add presets. Values in dB except ratio. Bands are
-  # low, low-mid, high-mid, high. In lite mode only the low-mid band's
-  # settings are used, wide-band.
+  # Override or add presets. Values in dB except ratio.
+  #   bass / presence / air: EQ at 80 Hz / 3 kHz / 10 kHz (all modes but minimal)
+  #   drive, limiter_drive: how hard the compressor and limiter are pushed
+  #   bands: the 4-band compressor (full mode): low, low-mid, high-mid, high
+  #   wideband: the single compressor (lite mode)
+  # Only the values you list are changed; the rest keep their defaults.
   presets: {}
   #  medium:
-  #    bass: 1.5
+  #    bass: 1.0
+  #    presence: 2.0
+  #    air: 2.0
   #  talk:
   #    drive: 2.0
   #    bass: 0.0
@@ -123,6 +151,13 @@ processing:
   #      - {threshold: -24, ratio: 3, gain: 4}
   #      - {threshold: -24, ratio: 3, gain: 4}
   #      - {threshold: -28, ratio: 4, gain: 2}
+
+engine:
+  # Latency/CPU trade-off.
+  #   true   large audio frames and buffers: least CPU, skips heard after 2-4 s
+  #   false  small ones: skips heard after about a second
+  #   auto   true on ARM boards (Raspberry Pi), false on PCs and servers
+  low_cpu: auto
 
 # Local control API used by the bridge and the CLI. Keep it on localhost.
 http:

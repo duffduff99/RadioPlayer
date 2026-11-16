@@ -18,6 +18,11 @@ RUN v=$(liquidsoap --version | head -1 | sed -E 's/^Liquidsoap ([0-9.]+).*/\1/')
  && [ "$(printf '%s\n2.2\n' "$v" | sort -V | head -1)" = "2.2" ] \
     || { echo "Liquidsoap $v is too old (need >= 2.2); use a newer BASE image"; exit 1; }
 
+# Pre-build Liquidsoap's standard-library cache (as root, into the system
+# cache dir) so the engine starts in seconds instead of re-type-checking the
+# whole library on every start, which takes ~20 s on a Raspberry Pi 3.
+RUN liquidsoap --cache-stdlib
+
 RUN useradd --system --no-create-home --home-dir /var/lib/radioplayer \
       --shell /usr/sbin/nologin --groups audio radioplayer \
  && install -d -o radioplayer -g radioplayer -m 0750 /var/lib/radioplayer /var/lib/radioplayer/emergency \

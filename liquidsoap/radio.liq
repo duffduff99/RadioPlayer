@@ -19,10 +19,10 @@ settings.log.file := false
 settings.log.level := 3
 settings.init.allow_root := true
 settings.frame.audio.samplerate := 44100
-# Larger frames cut per-frame overhead: on Liquidsoap 2.3 this takes CPU use
-# from ~4x to ~1x of what 2.2 needs. Controls react within ~0.2 s, which
-# does not matter for a radio station.
-settings.frame.duration := 0.2
+# Frame size comes from the engine profile (config.yaml, engine.low_cpu):
+# large frames cut per-frame overhead on slow boards, small ones make
+# controls react faster.
+settings.frame.duration := rp_frame_seconds
 settings.harbor.bind_addrs := [rp_http_bind]
 
 log.important(label="radioplayer", "Starting RadioPlayer engine")
@@ -34,7 +34,9 @@ log.important(label="radioplayer", "Starting RadioPlayer engine")
 current_playlist = ref(rp_initial_playlist)
 volume_db = ref(rp_initial_volume_db)
 current_preset = ref(rp_initial_preset)
-tone_on = ref(false)
+# "off", "tone" (calibration) or "sweep" (measurement); never persisted.
+signal_mode = ref("off")
+signal_started = ref(0.)
 
 def clamp(lo, hi, x) =
   if x < lo then lo elsif x > hi then hi else x end
@@ -126,10 +128,12 @@ music = mksafe(music)
 # Cut the source graph here and after the multiband compressor. Every frame
 # Liquidsoap checks readiness by walking the whole graph, and the multiband
 # split makes each walk revisit everything upstream once per branch; without
-# these buffers the full chain costs ~5x more CPU (measured: 72% -> 14% of a
-# core). Each adds 0.5 s of latency, which only delays controls slightly.
+# these buffers the full chain costs several times more CPU (measured on
+# Liquidsoap 2.3: 56% vs 8% of a desktop core). Each adds rp_cut_buffer
+# seconds of latency. Do not set buffer()'s max: audio arrives in bursts, and
+# a low cap makes the buffer drop audio and then run dry every few seconds.
 def graph_cut(s) =
-  mksafe(buffer(buffer=0.5, s))
+  mksafe(buffer(buffer=rp_cut_buffer, s))
 end
 music = graph_cut(music)
 
@@ -179,7 +183,7 @@ s = music
 #    up/down are time constants in seconds: rise slowly (no pumping), fall
 #    faster. Not reset per track, like a broadcast AGC. Below -40 dB (fades,
 #    silence) the gain is held so silence is not boosted.
-s = if rp_agc then
+s = if rp_agc and rp_processing_mode != "minimal" then
   normalize(target=rp_agc_target, up=10., down=1., window=1., gain_min=-10., gain_max=10.,
             threshold=-40., track_sensitive=false, s)
 else
@@ -237,16 +241,21 @@ def full_chain(s) =
 end
 
 # 2-5, "lite" mode for slower boards (e.g. Raspberry Pi 2/3): high-pass,
-# bass and presence EQ, one wide-band compressor (the preset's "wideband").
+# the same 3-band EQ, one wide-band compressor (the preset's "wideband").
 def lite_chain(s) =
   s = hp2(rp_highpass_hz, s)
   s = filter.iir.eq.peak(frequency=80., q=0.7, gain={p_bass()}, s)
   s = filter.iir.eq.peak(frequency=3000., q=1., gain={p_presence()}, s)
+  s = filter.iir.eq.peak(frequency=10000., q=0.8, gain={p_air()}, s)
   s = amplify({lin_of_dB(p_drive())}, s)
   band_comp(wide, 20., 250., s)
 end
 
-s = if rp_processing_mode == "lite" then lite_chain(s) else full_chain(s) end
+# "minimal" (for slow boards such as a Pi 3B): no AGC, EQ or compressor;
+# the limiter, low-pass, pre-emphasis protection and ceiling below still run.
+s = if rp_processing_mode == "lite" then lite_chain(s)
+    elsif rp_processing_mode == "minimal" then s
+    else full_chain(s) end
 s = graph_cut(s)
 
 ceiling = lin_of_dB(rp_ceiling_db)
@@ -313,14 +322,45 @@ meter_out = s
 #    nothing above the ceiling ever reaches the DAC.
 s = clip_at(ceiling, s)
 
-# Calibration tone: a 400 Hz sine exactly at the ceiling, i.e. the loudest
-# the processed audio can ever be. Inserted after processing so nothing alters
-# its level; the output trim below still applies. 400 Hz because many
-# multimeters only read AC voltage accurately up to a few hundred Hz. Only
-# reachable via the CLI/HTTP API, not Home Assistant, so it cannot go on air
-# by accident.
+# Test signals, inserted after processing so nothing alters them; the output
+# trim below still applies. Only reachable via the CLI/HTTP API, not Home
+# Assistant, so they cannot go on air by accident.
+#
+# "tone": a 400 Hz sine exactly at the ceiling, i.e. the loudest the processed
+# audio can ever be, for setting levels with a multimeter (many meters only
+# read AC accurately up to a few hundred Hz).
+#
+# "sweep": stepped tones 20 dB below the ceiling, for measuring the frequency
+# response of the transmitter chain from a recording. Low level because the
+# transmitter boosts treble (pre-emphasis) and must not clip. Each slot is
+# 2.25 s: 2 s of tone, 0.25 s of silence; 0 means a silent slot. Loops.
+sweep_slots = [0., 1000., 1000., 30., 50., 80., 125., 200., 315., 500., 800., 1000.,
+               1250., 2000., 3150., 5000., 6300., 8000., 10000., 12500., 14000.,
+               15000., 0., 0.]
+
+def sweep_position() =
+  t = time() - signal_started()
+  slot = int_of_float(t / 2.25)
+  {index = slot mod list.length(sweep_slots), within = t - float_of_int(slot) * 2.25}
+end
+
+def sweep_frequency() =
+  f = list.nth(sweep_slots, sweep_position().index)
+  if f == 0. then 1000. else f end
+end
+
+def sweep_amplitude() =
+  p = sweep_position()
+  if list.nth(sweep_slots, p.index) == 0. or p.within > 2. then 0. else ceiling * 0.1 end
+end
+
 tone = tag("calibration_tone", amplify(ceiling, sine(400.)))
-s = switch(id="tone_switch", track_sensitive=false, [({tone_on()}, tone), ({true}, s)])
+sweep = tag("measurement_sweep", sine(amplitude=sweep_amplitude, sweep_frequency))
+s = switch(id="signal_switch", track_sensitive=false, [
+  ({signal_mode() == "tone"}, tone),
+  ({signal_mode() == "sweep"}, sweep),
+  ({true}, s)
+])
 
 # 9. Output trim (the HA volume). Always <= max_volume_db, applied after the
 #    clip, so peaks at the DAC are at most ceiling + max_volume_db.
@@ -373,14 +413,19 @@ def on_meta(m) =
     source = m["rp_source"]
   }
 end
-s.on_metadata(on_meta)
+# Read song info where the playlists hand songs over, not at the output: on
+# Liquidsoap 2.3 metadata doesn't reliably pass through the crossfade plus
+# the graph-cut buffers, which left "now playing" stuck on an old song. This
+# reports a song a second or two before it is heard.
+music_fallback.on_metadata(on_meta)
 
 # --------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------
 
 if rp_output == "alsa" then
-  output.alsa(id="out", device=rp_alsa_device, s)
+  # Defined in generated.liq: the right call for this Liquidsoap version.
+  rp_output_alsa(s)
 elsif rp_output == "wav" then
   # For testing and measurement: record exactly what would go to the DAC.
   output.file(id="out", %wav(stereo=true, samplesize=24), rp_output_file, s)
@@ -412,7 +457,8 @@ def status_json() =
     volume_db = volume_db(),
     min_volume_db = rp_min_volume_db,
     max_volume_db = rp_max_volume_db,
-    tone = tone_on(),
+    tone = signal_mode() == "tone",
+    signal = signal_mode(),
     title = n.title,
     artist = n.artist,
     album = n.album,
@@ -488,11 +534,20 @@ def h_restart(_) =
   json_response(status_json())
 end
 
-def h_tone(req) =
-  on = list.assoc(default="", "on", req.query)
-  tone_on := (on == "1" or on == "true" or on == "on")
-  log.important(label="radioplayer", "Calibration tone #{tone_on()}")
-  json_response(status_json())
+def set_signal(mode) =
+  signal_started := time()
+  signal_mode := mode
+  log.important(label="radioplayer", "Test signal: #{mode}")
+end
+
+def h_signal(req) =
+  mode = list.assoc(default="", "mode", req.query)
+  if mode == "off" or mode == "tone" or mode == "sweep" then
+    set_signal(mode)
+    json_response(status_json())
+  else
+    error_response(400, "mode must be off, tone or sweep")
+  end
 end
 
 harbor.http.register.simple(port=rp_http_port, method="GET", "/status", h_status)
@@ -500,6 +555,6 @@ harbor.http.register.simple(port=rp_http_port, method="POST", "/skip", h_skip)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/playlist", h_playlist)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/volume", h_volume)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/preset", h_preset)
-harbor.http.register.simple(port=rp_http_port, method="POST", "/tone", h_tone)
+harbor.http.register.simple(port=rp_http_port, method="POST", "/signal", h_signal)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/reload", h_reload)
 harbor.http.register.simple(port=rp_http_port, method="POST", "/restart", h_restart)

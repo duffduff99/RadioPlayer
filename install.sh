@@ -43,6 +43,25 @@ say "Installing packages"
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   liquidsoap cifs-utils alsa-utils python3-venv python3-pip sudo rsync
 
+say "Checking that Liquidsoap starts"
+if ! timeout 120 liquidsoap --version >/dev/null 2>&1; then
+  avcodec=$(dpkg-query -W -f='${Version}' 'libavcodec[0-9]*' 2>/dev/null | head -1)
+  case "$avcodec" in
+    *rpt*)
+      die "liquidsoap crashes on startup on this system.
+Raspberry Pi OS replaces Debian's FFmpeg libraries with its own build
+(libavcodec $avcodec), and Debian's Liquidsoap package crashes when it loads
+them. Use the Docker install instead (README, section 2, option A): the
+image uses Debian's own FFmpeg." ;;
+    *)
+      die "liquidsoap crashes on startup on this system (try: liquidsoap --version).
+Use the Docker install instead (README, section 2, option A)." ;;
+  esac
+fi
+
+say "Pre-building Liquidsoap's standard library cache (faster engine starts)"
+liquidsoap --cache-stdlib >/dev/null 2>&1 || echo "(cache not supported by this Liquidsoap; skipping)"
+
 say "Creating system user '$USER_NAME'"
 if ! id "$USER_NAME" >/dev/null 2>&1; then
   useradd --system --home-dir "$STATE" --no-create-home --shell /usr/sbin/nologin \
