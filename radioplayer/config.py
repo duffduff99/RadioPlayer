@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,11 @@ DEFAULTS: dict[str, Any] = {
         "emergency_dir": "/var/lib/radioplayer/emergency",
         "emergency_refresh_days": 7,
         "emergency_max_mb": 2000,
+        "mirror": {
+            "enabled": False,
+            "dir": "/var/lib/radioplayer/library",
+            "interval_minutes": 15,
+        },
         "auto_playlists": True,
         "all_playlist_name": "All Music",
         "exclude": [],
@@ -81,7 +87,7 @@ DEFAULTS: dict[str, Any] = {
         "type": "alsa",
         "device": "plughw:CARD=Headphones,DEV=0",
         "file": "/var/lib/radioplayer/output.wav",
-        "alsa_buffer_seconds": 1.0,
+        "alsa_buffer_seconds": None,
         "default_volume_db": -6.0,
         "min_volume_db": -40.0,
         "max_volume_db": 0.0,
@@ -99,6 +105,7 @@ DEFAULTS: dict[str, Any] = {
         "crossovers": [150.0, 800.0, 5000.0],
         "presets": {},
     },
+    "engine": {"low_cpu": "auto"},
     "http": {"bind": "127.0.0.1", "port": 8005},
     "mqtt": {
         "host": "homeassistant.local",
@@ -132,6 +139,27 @@ class Config:
 
     def __getitem__(self, key: str) -> dict:
         return self.raw[key]
+
+    @property
+    def mirror_enabled(self) -> bool:
+        return bool(self.raw["music"]["mirror"]["enabled"])
+
+    @property
+    def mirror_dir(self) -> Path:
+        return Path(self.raw["music"]["mirror"]["dir"])
+
+    @property
+    def play_root(self) -> Path:
+        """Where the engine reads music: the local mirror if enabled, else the share."""
+        return self.mirror_dir if self.mirror_enabled else Path(self.raw["music"]["root"])
+
+    @property
+    def low_cpu(self) -> bool:
+        """Engine profile. auto: on for ARM boards (Raspberry Pi), off for PCs/servers."""
+        value = self.raw["engine"]["low_cpu"]
+        if value == "auto":
+            return platform.machine().lower().startswith(("arm", "aarch"))
+        return bool(value)
 
     @property
     def state_dir(self) -> Path:
@@ -225,8 +253,17 @@ def load(path: Path | str | None = None) -> Config:
         raise ConfigError("output.min_volume_db must be below max_volume_db")
     if not out["min_volume_db"] <= out["default_volume_db"] <= out["max_volume_db"]:
         raise ConfigError("output.default_volume_db must be between min_volume_db and max_volume_db")
-    if not 0.2 <= out["alsa_buffer_seconds"] <= 5:
-        raise ConfigError("output.alsa_buffer_seconds must be between 0.2 and 5")
+    if out["alsa_buffer_seconds"] is not None and not 0.1 <= out["alsa_buffer_seconds"] <= 5:
+        raise ConfigError("output.alsa_buffer_seconds must be between 0.1 and 5")
+    if raw["engine"]["low_cpu"] not in (True, False, "auto"):
+        raise ConfigError("engine.low_cpu must be true, false or auto")
+    mirror = raw["music"]["mirror"]
+    if not isinstance(mirror.get("enabled"), bool):
+        raise ConfigError("music.mirror.enabled must be true or false")
+    if mirror["enabled"] and Path(mirror["dir"]) == Path(raw["music"]["root"]):
+        raise ConfigError("music.mirror.dir must differ from music.root")
+    if not mirror["interval_minutes"] >= 1:
+        raise ConfigError("music.mirror.interval_minutes must be at least 1")
     if not -20 <= out["ceiling_db"] <= 0:
         raise ConfigError("output.ceiling_db must be between -20 and 0")
 

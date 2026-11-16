@@ -59,5 +59,5 @@ class Engine:
     def restart(self) -> dict:
         return self._request("POST", "/restart")
 
-    def tone(self, on: bool) -> dict:
-        return self._request("POST", "/tone", on="1" if on else "0")
+    def signal(self, mode: str) -> dict:
+        return self._request("POST", "/signal", mode=mode)

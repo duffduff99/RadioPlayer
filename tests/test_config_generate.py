@@ -176,3 +176,78 @@ def test_emphasis_fit_tracks_analog_curve():
         got = 20 * np.log10(abs((1 + k) - k * lp))
         want = 20 * np.log10(abs(1 + 1j * 2 * np.pi * f * us * 1e-6))
         assert np.max(abs(got - want)) < 1.0
+
+
+def mirror_cfg(tmp_path, source):
+    return write_config(tmp_path, {
+        "music": {"root": str(source), "mirror": {"enabled": True, "dir": str(tmp_path / "mirror")}},
+        "paths": {"state_dir": str(tmp_path / "state")},
+    })
+
+
+def test_mirror_sync_copies_updates_and_deletes(tmp_path):
+    from radioplayer.mirror import sync
+    src = tmp_path / "share"
+    for rel in ("Rock/a.mp3", "Rock/sub/b.flac", "Jazz/c.mp3", "Jazz/cover.jpg", ".hidden/x.mp3"):
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
+        (src / rel).write_bytes(rel.encode())
+    cfg = mirror_cfg(tmp_path, src)
+    dest = cfg.mirror_dir
+
+    r = sync(cfg)
+    assert (r.copied, r.deleted, r.total) == (3, 0, 3)
+    assert sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file()) == \
+        ["Jazz/c.mp3", "Rock/a.mp3", "Rock/sub/b.flac"]
+    assert not sync(cfg).changed  # second run: nothing to do
+
+    # Playlists now come from the mirror, not the share.
+    assert [p.folders for p in resolve_playlists(cfg)][0] == [str(dest / "Jazz")]
+
+    (src / "Rock/a.mp3").write_bytes(b"new content")
+    (src / "Jazz/c.mp3").unlink()
+    r = sync(cfg)
+    assert (r.copied, r.deleted) == (1, 1)
+    assert (dest / "Rock/a.mp3").read_bytes() == b"new content"
+    assert not (dest / "Jazz").exists()  # emptied folder removed
+
+
+def test_mirror_sync_never_empties_the_mirror(tmp_path):
+    from radioplayer.mirror import sync
+    src = tmp_path / "share"
+    for i in range(4):
+        (src / "Rock").mkdir(parents=True, exist_ok=True)
+        (src / f"Rock/{i}.mp3").write_bytes(b"x")
+    cfg = mirror_cfg(tmp_path, src)
+    sync(cfg)
+    count = lambda: len(list(cfg.mirror_dir.rglob("*.mp3")))  # noqa: E731
+    assert count() == 4
+
+    # Share looks empty (e.g. unmounted): nothing happens.
+    for f in (src / "Rock").iterdir():
+        f.rename(tmp_path / f.name)
+    assert sync(cfg) is None and count() == 4
+
+    # Share missing entirely.
+    (src / "Rock").rmdir()
+    src.rmdir()
+    assert sync(cfg) is None and count() == 4
+
+    # Most of the library gone: deletions need --force.
+    (src / "Pop").mkdir(parents=True)
+    (src / "Pop/only.mp3").write_bytes(b"y")
+    r = sync(cfg)
+    assert r.deletes_skipped and r.copied == 1 and count() == 5
+    r = sync(cfg, force=True)
+    assert r.deleted == 4 and count() == 1
+
+
+def test_engine_profiles(tmp_path, library):
+    for low_cpu, frame in ((True, "0.2"), (False, "0.05")):
+        cfg = write_config(tmp_path, {**base(tmp_path, library), "engine": {"low_cpu": low_cpu}})
+        text = render(cfg, resolve_playlists(cfg), {})
+        assert f"rp_frame_seconds = {frame}" in text
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "engine": {"low_cpu": False},
+                                  "output": {"alsa_buffer_seconds": 2}})
+    assert "rp_alsa_buffer = 2.0" in render(cfg, resolve_playlists(cfg), {})
+    with pytest.raises(ConfigError, match="low_cpu"):
+        write_config(tmp_path, {"engine": {"low_cpu": "fast"}})

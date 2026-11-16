@@ -126,23 +126,38 @@ cd RadioPlayer
 cp config/config.example.yaml config.yaml
 nano config.yaml                    # mqtt section and output.device at minimum
 aplay -L | grep -A1 ^plughw         # find your output device name
-docker compose up -d --build        # first build on a Pi 3B takes several minutes
+docker compose up -d                # pulls the published image
 docker compose logs -f              # watch it start (Ctrl-C to stop watching)
 ```
+
+`docker compose up -d` pulls `ghcr.io/duffduff99/radioplayer:latest`, which
+GitHub builds from `main` for PCs/servers (amd64) and Raspberry Pi (arm64).
+To build from your checkout instead, add `--build` (several minutes on a
+Pi 3B). If the pull is refused, the package is still private: on GitHub open
+the repository's *Packages*, then *Package settings*, and change its
+visibility to public (or run `docker login ghcr.io`).
 
 Both containers (`engine` and `bridge`) restart automatically after a crash
 or reboot. Day to day:
 
 ```bash
-docker compose exec engine radioplayer status      # or any command in section 8
+docker compose exec engine radioplayer status      # or any command in section 9
 docker compose restart                             # after editing config.yaml
-git pull && docker compose up -d --build           # update
+docker compose pull && docker compose up -d        # update
 ```
 
 Settings, the last playlist/level/preset and the emergency music copy live
 in the Docker volume `radioplayer_state`, so they survive rebuilds.
 
 Docker notes:
+- **Stack managers (Dockhand, Portainer, ...):** deploy `compose.yaml` as a
+  stack and set `CONFIG_FILE` to the absolute path of your `config.yaml` on
+  the Docker host, e.g. `CONFIG_FILE=/opt/radioplayer/config.yaml`.
+- **Virtual machines (Proxmox, ...):** pass the USB sound card through to
+  the VM (in Proxmox: Hardware → Add → USB Device, by vendor/device ID).
+  The engine uses one CPU core; two cores for the VM is plenty. Set
+  `processing.mode: full`. If the card is unplugged or re-attached, the
+  engine restarts until it can open it again.
 - The music folder is `/mnt/radio` by default. Use another host path with
   `MUSIC_DIR=/path docker compose up -d`.
 - The share is passed in with `rslave` mount propagation, so the container
@@ -191,7 +206,15 @@ config.
 
 ### Both
 
-On first start the bridge copies a random ~2 GB of the library to the SD
+**Local mirror (recommended if the library fits on local disk).** Set
+`music.mirror.enabled: true` and the whole share is copied to local disk
+and played from there, so a NAS or network outage has no effect on air.
+The share is re-checked every 15 minutes and on Rescan. The first sync
+happens right after the first start; music begins when it finishes. The
+mirror never deletes files because the share is unreachable or looks
+mostly empty (to confirm a real mass deletion: `radioplayer sync --force`).
+
+Without the mirror: on first start the bridge copies a random ~2 GB of the library to the SD
 card as the emergency folder, and refreshes it weekly (`emergency_*` in
 the config). With a library of a few hundred songs, raise
 `emergency_max_mb` until the whole library fits.
@@ -382,7 +405,8 @@ non-commercial use).
 | Failure | What happens |
 |---|---|
 | Selected playlist empty or unreadable | Plays the whole library (source `all`); "Playing fallback" turns on |
-| SMB server down or network lost | Soft mount fails reads within seconds instead of hanging; plays the **emergency folder** (local SD card) and returns automatically when the share is back |
+| SMB server down or network lost, **mirror on** | Nothing: the engine plays the local copy; the mirror updates when the share is back |
+| SMB server down or network lost, mirror off | Soft mount fails reads within seconds instead of hanging; plays the **emergency folder** (local SD card) and returns automatically when the share is back |
 | Share down at boot | Automount retries on access; playlist list comes from cache |
 | Emergency folder also empty | Silence (the last resort). The bridge fills it on first start; check the bridge log if it's empty |
 | Processing produces NaN/garbage, or output dead while input has audio | Watchdog restarts the engine within ~10 s |
@@ -392,7 +416,24 @@ non-commercial use).
 
 ---
 
-## 8. Command line
+## 8. Measuring the transmitter chain
+
+To set the EQ from measurements instead of by ear, play a known signal and
+record what a receiver gets (ideally an SDR on the coax, with **de-emphasis
+switched off** in the SDR software, saved as WAV or FLAC).
+
+- Through the player: `radioplayer signal sweep` plays stepped tones from
+  30 Hz to 15 kHz (2 s each, looping, 1 kHz first) at 20 dB below the
+  ceiling, after all processing. Stop with `radioplayer signal off`.
+- Straight into the modulator (to measure the modulator alone):
+  `python3 tools/make_test_signal.py test.wav` writes the same tones as a
+  file to play from any device.
+
+Comparing the level of each tone in the recording with what was sent gives
+the frequency response, and shows whether the modulator applies
+pre-emphasis.
+
+## 9. Command line
 
 ```bash
 R="docker compose exec engine radioplayer"   # Docker
@@ -404,13 +445,15 @@ $R volume -6              # dB, clamped to min/max_volume_db
 $R preset heavy
 $R reload                 # re-read all folders now
 $R tone on|off            # calibration tone (ON AIR)
+$R signal sweep|off       # measurement tones, 20 dB below the ceiling (ON AIR)
+$R sync                   # update the local mirror now (if enabled)
 $R check                  # validate config, list playlists
 $R refresh-emergency --max-mb 2000    # native: prefix with sudo -u radioplayer
 docker compose logs -f                                 # Docker logs
 journalctl -u radioplayer-engine -u radioplayer-bridge -f   # native logs
 ```
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 Logs: `docker compose logs engine` / `docker compose logs bridge` (Docker),
 or `journalctl -u radioplayer-engine` / `-u radioplayer-bridge` (native).
@@ -430,7 +473,7 @@ or `journalctl -u radioplayer-engine` / `-u radioplayer-bridge` (native).
   `/etc/radioplayer/smb-credentials`, then
   `sudo systemctl daemon-reload && sudo systemctl restart mnt-radio.automount`.
 
-## 10. What was and wasn't tested
+## 11. What was and wasn't tested
 
 Tested in a Linux container, on Liquidsoap **2.2.4 and 2.3.2**:
 playlist switching, skip, level clamping, presets, state persistence,

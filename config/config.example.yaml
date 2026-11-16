@@ -41,6 +41,18 @@ music:
   # then the local emergency folder below.
   fallback_to_all: true
 
+  # Local mirror: copy the WHOLE share to local disk and always play from
+  # the copy. A NAS or network outage then has no effect on air. Recommended
+  # whenever the library fits on the local disk. The share is re-checked
+  # every interval_minutes and when "Rescan music library" is pressed; new
+  # and changed files are copied, files removed from the share are removed
+  # (never when the share is unreachable or looks mostly empty).
+  # With the mirror on, the emergency folder below is not used.
+  mirror:
+    enabled: false
+    dir: /var/lib/radioplayer/library
+    interval_minutes: 15
+
   # Local copy of some music on the SD card, used when the share is down.
   # Filled at first start, then refreshed with a new random selection every
   # emergency_refresh_days (0 = never; fill it by hand instead). With a
@@ -72,9 +84,10 @@ output:
   # calibration (see README) so nobody can overdrive the modulator.
   max_volume_db: 0.0
 
-  # Sound card buffer (Liquidsoap 2.3+). Raise it if the engine log shows
-  # "Underrun!" (crackles/dropouts); costs that much extra delay on controls.
-  alsa_buffer_seconds: 1.0
+  # Sound card buffer in seconds (Liquidsoap 2.3+). null = from the engine
+  # profile below (1.0 low-CPU, 0.25 otherwise). Raise it if the engine log
+  # shows "Underrun!" (crackles/dropouts); it delays controls by that much.
+  alsa_buffer_seconds: null
 
   # Highest sample level the processing will ever output (dBFS).
   ceiling_db: -1.0
@@ -90,6 +103,7 @@ processing:
   #   minimal  no AGC/EQ/compressor; keeps limiter, filters,
   #            pre-emphasis protection and ceiling          ~55%
   # If the engine log shows "Underrun!" or "catchup", step down a mode.
+  # On a PC or server, use full.
   mode: lite
 
   # Preset on first start: flat, light, medium or heavy (or one of yours).
@@ -137,6 +151,13 @@ processing:
   #      - {threshold: -24, ratio: 3, gain: 4}
   #      - {threshold: -24, ratio: 3, gain: 4}
   #      - {threshold: -28, ratio: 4, gain: 2}
+
+engine:
+  # Latency/CPU trade-off.
+  #   true   large audio frames and buffers: least CPU, skips heard after 2-4 s
+  #   false  small ones: skips heard after about a second
+  #   auto   true on ARM boards (Raspberry Pi), false on PCs and servers
+  low_cpu: auto
 
 # Local control API used by the bridge and the CLI. Keep it on localhost.
 http:
