@@ -53,7 +53,7 @@ music:
     dir: /var/lib/radioplayer/library
     interval_minutes: 15
 
-  # Local copy of some music on the SD card, used when the share is down.
+  # Local copy of some music on local disk, used when the share is down.
   # Filled at first start, then refreshed with a new random selection every
   # emergency_refresh_days (0 = never; fill it by hand instead). With a
   # small library, raise emergency_max_mb so the whole library fits.
@@ -71,10 +71,11 @@ output:
   # alsa: sound card. (dummy / wav are for testing.)
   type: alsa
   # List devices with:  aplay -L | grep -A1 ^plughw
-  # Pi built-in 3.5 mm jack:   plughw:CARD=Headphones,DEV=0
-  # Typical USB DAC/dongle:    plughw:CARD=Device,DEV=0   (name varies)
-  # (With Docker, run `aplay -L` on the host.)
-  device: "plughw:CARD=Headphones,DEV=0"
+  # Find the card name with `aplay -l` on the host ("card 1: Audio [...]"
+  # gives CARD=Audio). It varies between sound cards.
+  #   USB sound card:                  plughw:CARD=Audio,DEV=0
+  #   Raspberry Pi built-in 3.5 mm:    plughw:CARD=Headphones,DEV=0
+  device: "plughw:CARD=Audio,DEV=0"
 
   # Output level, in dB, set from Home Assistant. Applied after the limiter,
   # so it never makes peaks louder than the ceiling.
@@ -103,8 +104,8 @@ processing:
   #   minimal  no AGC/EQ/compressor; keeps limiter, filters,
   #            pre-emphasis protection and ceiling          ~55%
   # If the engine log shows "Underrun!" or "catchup", step down a mode.
-  # On a PC or server, use full.
-  mode: lite
+  # On a PC, server or Raspberry Pi 4/5 use full; on a Pi 3B, lite.
+  mode: full
 
   # Preset on first start: flat, light, medium or heavy (or one of yours).
   # Quote it if you name a preset "off"/"on"/"yes"/"no" (YAML reads those
