@@ -251,3 +251,26 @@ def test_engine_profiles(tmp_path, library):
     assert "rp_alsa_buffer = 2.0" in render(cfg, resolve_playlists(cfg), {})
     with pytest.raises(ConfigError, match="low_cpu"):
         write_config(tmp_path, {"engine": {"low_cpu": "fast"}})
+
+
+def test_env_overrides(tmp_path, monkeypatch):
+    monkeypatch.setenv("RADIOPLAYER__MQTT__HOST", "broker.lan")
+    monkeypatch.setenv("RADIOPLAYER__MQTT__PORT", "8883")
+    monkeypatch.setenv("RADIOPLAYER__MQTT__PASSWORD", "12345")       # stays text
+    monkeypatch.setenv("RADIOPLAYER__MQTT__USERNAME", "")            # empty: ignored
+    monkeypatch.setenv("RADIOPLAYER__MUSIC__MIRROR__ENABLED", "true")
+    monkeypatch.setenv("RADIOPLAYER__HTTP__HOST", "engine")
+    cfg = write_config(tmp_path, {"mqtt": {"host": "from-file", "username": "fileuser"}})
+    assert cfg["mqtt"]["host"] == "broker.lan"
+    assert cfg["mqtt"]["port"] == 8883
+    assert cfg["mqtt"]["password"] == "12345"
+    assert cfg["mqtt"]["username"] == "fileuser"
+    assert cfg.mirror_enabled is True
+    from radioplayer.engine import Engine
+    assert Engine(cfg).base == "http://engine:8005"
+
+
+def test_env_override_unknown_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("RADIOPLAYER__MQTT__HOSTNAME", "x")
+    with pytest.raises(ConfigError, match="no such setting mqtt.hostname"):
+        write_config(tmp_path, {})
