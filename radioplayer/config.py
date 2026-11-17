@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -106,7 +107,9 @@ DEFAULTS: dict[str, Any] = {
         "presets": {},
     },
     "engine": {"low_cpu": "auto"},
-    "http": {"bind": "127.0.0.1", "port": 8005},
+    # bind: where the engine's control API listens. host: where the bridge
+    # and CLI reach it (default: the bind address, or localhost).
+    "http": {"bind": "127.0.0.1", "port": 8005, "host": None},
     "mqtt": {
         "host": "homeassistant.local",
         "port": 1883,
@@ -229,6 +232,37 @@ def _validate_preset(name: str, p: dict) -> None:
             raise ConfigError(f"preset {name!r} band {i + 1}: ratio must be >= 1")
 
 
+ENV_PREFIX = "RADIOPLAYER__"
+# Settings that are text even when they look like a number or a boolean.
+_ENV_ALWAYS_TEXT = {("mqtt", "username"), ("mqtt", "password")}
+
+
+def _apply_env(raw: dict, environ) -> None:
+    """Override settings from the environment, on top of config.yaml.
+
+    RADIOPLAYER__MQTT__HOST=broker sets mqtt.host; nested keys use more double
+    underscores (RADIOPLAYER__MUSIC__MIRROR__ENABLED=true). Empty values are
+    ignored, so a compose file can pass variables that may be unset.
+    """
+    for name, value in environ.items():
+        if not name.startswith(ENV_PREFIX) or value == "":
+            continue
+        keys = tuple(k.lower() for k in name[len(ENV_PREFIX):].split("__"))
+        node = raw
+        for key in keys[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict) or keys[-1] not in node or isinstance(node[keys[-1]], (dict, list)):
+            raise ConfigError(f"{name}: no such setting {'.'.join(keys)}")
+        current = node[keys[-1]]
+        if keys in _ENV_ALWAYS_TEXT or isinstance(current, str):
+            node[keys[-1]] = value
+        else:
+            try:
+                node[keys[-1]] = yaml.safe_load(value)
+            except yaml.YAMLError:
+                raise ConfigError(f"{name}: cannot parse {value!r}") from None
+
+
 def load(path: Path | str | None = None) -> Config:
     path = Path(path) if path else DEFAULT_CONFIG_PATH
     try:
@@ -242,6 +276,7 @@ def load(path: Path | str | None = None) -> Config:
         raise ConfigError(f"{path}: top level must be a mapping")
 
     raw = _merge(DEFAULTS, user)
+    _apply_env(raw, os.environ)
     cfg = Config(raw=raw, path=path)
 
     out = raw["output"]

@@ -31,7 +31,7 @@ with reduced processing.
  music share ──► local mirror ──► Liquidsoap engine ──────────────► USB sound card ──► modulator L/R
  (SMB, on host)   (optional)       playlists → fallback → AGC → EQ → multiband
                                    → limiter → 15 kHz LPF → ceiling clip → level
-                                        ▲ HTTP (localhost)
+                                        ▲ HTTP (private network)
                                         │
                                   radioplayer bridge ◄──── MQTT ────► Home Assistant
 ```
@@ -128,47 +128,56 @@ Replace `//NAS/Music` with your server and share. `soft` makes reads fail
 within seconds during an outage instead of hanging, and
 `x-systemd.automount` remounts automatically when the server is back.
 
-**4. Write the config.** Start from
-[config/config.example.yaml](config/config.example.yaml); every setting is
-explained there. The ones to set first:
+**4. Start it,** either from a stack manager or from the command line. A
+basic setup needs only a few environment variables:
 
-```yaml
-music:
-  root: /mnt/radio            # or a subfolder, e.g. /mnt/radio/Radio
-  mirror:
-    enabled: true             # play from a local copy (see below)
-output:
-  device: "plughw:CARD=Audio,DEV=0"
-processing:
-  mode: full                  # lite on a Raspberry Pi 3B
-mqtt:
-  host: 192.168.1.10          # your Home Assistant / MQTT broker
-  username: radioplayer
-  password: CHANGE_ME
-```
+| Variable | Meaning | Example |
+|---|---|---|
+| `MQTT_HOST` | Home Assistant's MQTT broker (name or IP) | `mqtt.example.lan` |
+| `MQTT_USERNAME`, `MQTT_PASSWORD` | broker login | |
+| `MQTT_PORT` | broker port, if not 1883 | |
+| `AUDIO_DEVICE` | the sound card from step 2 | `plughw:CARD=Audio,DEV=0` |
+| `MUSIC_ROOT` | music folder as the container sees it; the share is at `/mnt/radio` | `/mnt/radio/Radio` |
+| `MIRROR` | `true` to play from a local copy (see below) | `true` |
+| `PROCESSING_MODE` | `full`, `lite` or `minimal` | `full` |
 
-**5. Start it,** either from the command line or from a stack manager.
+*Stack manager (Dockhand, Portainer, ...):* create a stack from this Git
+repository with compose file `compose.yaml`, and enter the variables above
+as the stack's environment.
 
 *Command line:*
 
 ```bash
 git clone https://github.com/duffduff99/RadioPlayer.git
 cd RadioPlayer
-cp config/config.example.yaml config.yaml && nano config.yaml
+nano .env                           # the variables above, one NAME=value per line
 docker compose up -d                # pulls the published image
 docker compose logs -f              # watch it start (Ctrl-C to stop watching)
 ```
 
-*Stack manager (Dockhand, Portainer, ...):* put `config.yaml` somewhere on
-the Docker host, for example `/opt/radioplayer/config.yaml`, and make it
-readable (`chmod 644`). Create a stack from this Git repository with compose
-file `compose.yaml` and the environment variable
-`CONFIG_FILE=/opt/radioplayer/config.yaml`.
-
 Either way you get two containers, `engine` and `bridge`, which restart
-automatically after a crash or reboot. The image is
+automatically after a crash or reboot. They talk to each other on the
+stack's own private network; no ports are opened on the host. The image is
 `ghcr.io/duffduff99/radioplayer:latest`, built by GitHub from `main` for
 PCs/servers (amd64) and Raspberry Pi (arm64).
+
+**5. Fine-tune in `config.yaml` (optional).** On first start a default
+`config.yaml`, with every setting explained, is created on the `config`
+volume. Everything beyond the variables above is set there: combined
+playlists, output level limits, processing presets, crossfade and so on. See
+[config/config.example.yaml](config/config.example.yaml) for the contents.
+
+- The file is on the Docker host at
+  `/var/lib/docker/volumes/<stack>_config/_data/config.yaml` (edit it as
+  root), or use your stack manager's volume browser.
+- To keep it in a folder of your choice instead, set `CONFIG_DIR` to a host
+  folder, e.g. `CONFIG_DIR=/opt/radioplayer`. If the folder has no
+  `config.yaml` yet, create one or make the folder writable for the
+  container.
+- An environment variable always wins over the same setting in the file.
+  Any setting can be given as a variable to the containers in the form
+  `RADIOPLAYER__SECTION__KEY`, e.g. `RADIOPLAYER__OUTPUT__CROSSFADE_SECONDS=0`.
+- Restart the stack after changing the file or the variables.
 
 Day to day:
 
@@ -178,8 +187,9 @@ docker compose restart                             # after editing config.yaml
 docker compose pull && docker compose up -d        # update
 ```
 
-Settings, the last playlist/level/preset and the local music copy live in
-the Docker volume `radioplayer_state`, so they survive updates.
+The last playlist/level/preset and the local music copy live in the Docker
+volume `state`, and the configuration in the volume `config`, so both
+survive updates.
 
 ### The local mirror
 
@@ -201,9 +211,11 @@ the config), played while the share is unreachable.
 
 ### Notes
 
-- **Environment variables** for `compose.yaml`: `CONFIG_FILE` (default
-  `./config.yaml`), `MUSIC_DIR` (host path of the share, default
-  `/mnt/radio`) and `RADIOPLAYER_IMAGE`.
+- **Other variables** for `compose.yaml`: `MUSIC_DIR` (where the share is
+  mounted on the host, default `/mnt/radio`) and `RADIOPLAYER_IMAGE`.
+- **MQTT broker address:** the containers use Docker's regular networking,
+  so `MQTT_HOST` must be a DNS name or an IP address. mDNS names such as
+  `homeassistant.local` usually don't resolve there.
 - **Build it yourself** instead of pulling: `docker compose up -d --build`
   (several minutes on a Pi 3B). The build refuses Liquidsoap older than 2.2.
 - **"not a shared or slave mount" on start:** the share is passed in with
@@ -489,8 +501,8 @@ container logs in your stack manager.
 - **Radio missing from Home Assistant:** the bridge announces it only once
   both the MQTT broker and the engine are reachable. The bridge log shows
   `Connected to MQTT broker`, then `Engine online` and `Published Home
-  Assistant discovery`. If `mqtt.host` is a `.local` name that doesn't
-  resolve, use the IP address.
+  Assistant discovery`. `MQTT_HOST` must be a DNS name or IP address, not a
+  `.local` name.
 - **"Playing fallback" stays on:** `radioplayer status` shows `source`.
   `all` means the selected folder has no playable files; `emergency` means
   the share is unreachable (`ls /mnt/radio` on the host).

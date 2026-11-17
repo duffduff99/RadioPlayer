@@ -26,7 +26,8 @@ RUN liquidsoap --cache-stdlib
 RUN useradd --system --no-create-home --home-dir /var/lib/radioplayer \
       --shell /usr/sbin/nologin --groups audio radioplayer \
  && install -d -o radioplayer -g radioplayer -m 0750 /var/lib/radioplayer /var/lib/radioplayer/emergency \
- && install -d /etc/radioplayer /mnt/radio \
+ && install -d -o radioplayer -g radioplayer /etc/radioplayer \
+ && install -d /mnt/radio \
  && printf '#!/bin/sh\nexec python3 -m radioplayer "$@"\n' > /usr/local/bin/radioplayer \
  && chmod 0755 /usr/local/bin/radioplayer
 
@@ -38,7 +39,7 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint
 ENV PYTHONPATH=/opt/radioplayer \
     PYTHONUNBUFFERED=1
 
-VOLUME /var/lib/radioplayer
+VOLUME /var/lib/radioplayer /etc/radioplayer
 USER radioplayer
 ENTRYPOINT ["entrypoint"]
 CMD ["engine"]

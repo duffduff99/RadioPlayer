@@ -1,12 +1,14 @@
 # RadioPlayer configuration.
-#   Docker:  config.yaml next to compose.yaml
-#   Native:  /etc/radioplayer/config.yaml
+#   Docker:   config.yaml on the "config" volume (created from this file on
+#             first start), or in the folder given as CONFIG_DIR
+#   systemd:  /etc/radioplayer/config.yaml
 #
-# After editing, validate and restart (a few seconds of silence on air):
-#   Docker:  docker compose run --rm engine radioplayer check
-#            docker compose restart
-#   Native:  sudo -u radioplayer /opt/radioplayer/venv/bin/radioplayer check
-#            sudo systemctl restart radioplayer-engine radioplayer-bridge
+# With Docker, environment variables override this file: MQTT_HOST,
+# AUDIO_DEVICE and the others listed in compose.yaml, or any setting as
+# RADIOPLAYER__SECTION__KEY.
+#
+# After editing, restart the stack (a few seconds of silence on air). To
+# validate first:  radioplayer check   (in the engine container)
 
 music:
   # Where the SMB share is mounted (see /etc/systemd/system/mnt-radio.mount).
@@ -160,13 +162,16 @@ engine:
   #   auto   true on ARM boards (Raspberry Pi), false on PCs and servers
   low_cpu: auto
 
-# Local control API used by the bridge and the CLI. Keep it on localhost.
+# Local control API used by the bridge and the CLI. It has no password:
+# keep it on localhost. (With Docker, compose.yaml sets bind and host so the
+# two containers reach each other on the stack's private network.)
 http:
   bind: 127.0.0.1
   port: 8005
 
 mqtt:
-  # Your Home Assistant MQTT broker (e.g. the Mosquitto add-on).
+  # Your Home Assistant MQTT broker (e.g. the Mosquitto add-on). With
+  # Docker, use a DNS name or IP address; .local names don't resolve there.
   host: homeassistant.local
   port: 1883
   username: radioplayer

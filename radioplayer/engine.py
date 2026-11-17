@@ -17,7 +17,7 @@ class EngineError(Exception):
 class Engine:
     def __init__(self, cfg: Config, timeout: float = 3.0):
         http = cfg["http"]
-        host = "127.0.0.1" if http["bind"] in ("0.0.0.0", "::") else http["bind"]
+        host = http["host"] or ("127.0.0.1" if http["bind"] in ("0.0.0.0", "::") else http["bind"])
         self.base = f"http://{host}:{int(http['port'])}"
         self.timeout = timeout
 
