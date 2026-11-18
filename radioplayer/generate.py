@@ -247,6 +247,11 @@ def render(cfg: Config, playlists: list[Playlist], state: dict,
 
     profile = ENGINE_PROFILES[cfg.low_cpu]
     emphasis = emphasis_fit(proc["preemphasis_us"])
+    leveling = cfg.leveling
+    if leveling == "track" and proc["leveling"] == "auto" and ls_version is not None and ls_version < (2, 3):
+        # Liquidsoap 2.2 measures songs' loudness in a way that stalls the
+        # engine, so auto picks the AGC there.
+        leveling = "agc"
     alsa_buffer = out["alsa_buffer_seconds"] or profile["alsa_buffer"]
 
     def pl(p: Playlist) -> str:
@@ -281,6 +286,7 @@ def render(cfg: Config, playlists: list[Playlist], state: dict,
         f"rp_output_file = {liq_str(out['file'])}",
         f"rp_alsa_buffer = {liq_float(alsa_buffer)}",
         f"rp_frame_seconds = {liq_float(profile['frame'])}",
+        f"rp_low_cpu = {liq_bool(cfg.low_cpu)}",
         f"rp_cut_buffer = {liq_float(profile['cut_buffer'])}",
         f"rp_initial_volume_db = {liq_float(volume)}",
         f"rp_min_volume_db = {liq_float(out['min_volume_db'])}",
@@ -291,7 +297,10 @@ def render(cfg: Config, playlists: list[Playlist], state: dict,
         f"rp_emphasis_tau = {liq_float(emphasis[0])}",
         f"rp_emphasis_k = {liq_float(emphasis[1])}",
         correction_def(proc["correction"]),
-        f"rp_agc = {liq_bool(proc['agc'])}",
+        f"rp_leveling = {liq_str(leveling)}",
+        f"rp_track_gain_max = {liq_float(proc['track_gain_max_db'])}",
+        f"rp_track_gain_offset = {liq_float(proc['track_gain_offset_db'])}",
+        f"rp_mono = {liq_bool(out['mono'])}",
         f"rp_agc_target = {liq_float(proc['agc_target_db'])}",
         f"rp_highpass_hz = {liq_float(proc['highpass_hz'])}",
         f"rp_lowpass_hz = {liq_float(proc['lowpass_hz'])}",

@@ -65,6 +65,29 @@ def tag(name, s) =
   metadata.map(fun (_) -> [("rp_source", name)], s)
 end
 
+# Track leveling: each song gets one fixed gain from its ReplayGain, read
+# from tags or measured when the song is loaded (decoding the file at up to
+# 50x real time, while the previous song plays). Boosts are capped so quiet
+# songs aren't pushed into the limiter.
+if rp_leveling == "track" then
+  enable_replaygain_metadata()
+end
+
+def track_gain(s) =
+  def adjust(m) =
+    raw = m["replaygain_track_gain"]
+    if raw == "" then
+      []
+    else
+      g = string.to_float(default=0., list.hd(default="0", string.split(separator=" ", string.trim(raw))))
+      g = g + rp_track_gain_offset
+      g = if g > rp_track_gain_max then rp_track_gain_max else g end
+      [("replaygain_track_gain", "#{g} dB")]
+    end
+  end
+  replaygain(metadata.map(adjust, s))
+end
+
 # One shuffled folder. "randomize" plays every file once in random order
 # before reshuffling, so songs do not repeat until the folder is exhausted.
 # Tracks with long silence (hidden tracks, long fade tails) are skipped.
@@ -79,7 +102,8 @@ def folder(id, path) =
     path
   )
   reloaders := list.append(reloaders(), [fun () -> s.reload()])
-  blank.skip(threshold=-45., max_blank=rp_max_blank, s)
+  s = blank.skip(threshold=-45., max_blank=rp_max_blank, s)
+  if rp_leveling == "track" then track_gain(s) else s end
 end
 
 # A playlist made of one or more folders. Multiple folders are picked
@@ -177,13 +201,15 @@ apply_preset(current_preset())
 
 # Input level meter for the watchdog below.
 music = peak(id="meter_in", duration=1., music)
-s = music
+# Mono output (output.mono): the same mix on both channels, before any
+# processing so the limiter and protection see exactly what is sent.
+s = if rp_mono then audio_to_stereo(mean(music)) else music end
 
 # 1. Slow AGC: rides gain so quiet and loud masters come out similar.
 #    up/down are time constants in seconds: rise slowly (no pumping), fall
 #    faster. Not reset per track, like a broadcast AGC. Below -40 dB (fades,
 #    silence) the gain is held so silence is not boosted.
-s = if rp_agc and rp_processing_mode != "minimal" then
+s = if rp_leveling == "agc" and rp_processing_mode != "minimal" then
   normalize(target=rp_agc_target, up=10., down=1., window=1., gain_min=-10., gain_max=10.,
             threshold=-40., track_sensitive=false, s)
 else
@@ -343,12 +369,24 @@ end
 #     The limiter handles sustained treble; the clip catches fast transients
 #     (cymbals, "s" sounds) it is too slow for. De-emphasis then turns down
 #     the clip's distortion, and a second low-pass keeps it off the pilot.
+#
+#     On servers the limiter works on the treble only (above 2.5 kHz), so a
+#     cymbal or "s" no longer turns down the bass and vocals with it: in
+#     tests that removed all audible ducking below 1 kHz (up to 2-3 dB
+#     before) for ~2% of a CPU core. Low-CPU mode keeps the cheaper
+#     full-band limiter. Either way the clip on the whole emphasized signal
+#     is the backstop that keeps peaks under the ceiling.
 s = if rp_emphasis_tau > 0. then
-  e = emphasis(s)
-  # Emphasis leaves bass at ~unity gain, so these levels also cap bass: just
-  # under the main ceiling keeps nearly all of its headroom. Treble peaks can
-  # overshoot by ~1 dB after de-emphasis and the low-pass.
-  e = compress(attack=0.5, release=40., knee=1., ratio=20., threshold=rp_ceiling_db - 1.5, e)
+  e = if rp_low_cpu then
+    # Emphasis leaves bass at ~unity gain, so this level also caps bass:
+    # just under the main ceiling keeps nearly all of its headroom.
+    compress(attack=0.5, release=40., knee=1., ratio=20., threshold=rp_ceiling_db - 1.5, emphasis(s))
+  else
+    hi = lr_high(2500., s)
+    hi = deemphasis(compress(attack=0.5, release=40., knee=1., ratio=20., threshold=rp_ceiling_db - 3., emphasis(hi)))
+    emphasis(add(normalize=false, [lr_low(2500., s), hi]))
+  end
+  # Treble peaks can overshoot by ~1 dB after de-emphasis and the low-pass.
   e = clip_at(lin_of_dB(rp_ceiling_db - 0.5), e)
   lp8(rp_lowpass_hz, deemphasis(e))
 else

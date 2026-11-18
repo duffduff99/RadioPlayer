@@ -98,6 +98,11 @@ output:
   # Crossfade between songs (0 to disable).
   crossfade_seconds: 2.0
 
+  # Send one mono mix (left + right) to both outputs. Use it with the
+  # modulator in mono mode: the ZFMSM then appears to use only its left
+  # input, so without this the right channel's instruments would be lost.
+  mono: false
+
 processing:
   # How much processing to run. Measured share of one CPU core on a Pi 3B
   # (Liquidsoap 2.3), approximately:
@@ -135,7 +140,22 @@ processing:
   # the only effect is slightly reined-in treble on the brightest moments.
   preemphasis_us: 75
 
-  # Slow automatic gain control so quiet and loud recordings even out.
+  # How song levels are evened out, so quiet 1970s masters and loud modern
+  # ones come out similar:
+  #   track  each song plays at one fixed gain, from its ReplayGain tags or
+  #          measured when it loads (~1 s of CPU per song). Nothing rides
+  #          the level inside a song, so quiet intros and breakdowns stay
+  #          quiet, as mastered.
+  #   agc    slow automatic gain control (10 s up, 1 s down) toward
+  #          agc_target_db. Audible "breathing" on dynamic music.
+  #   none   songs play at their mastered level.
+  #   auto   track on PCs/servers with Liquidsoap 2.3+, agc otherwise.
+  leveling: auto
+  # Largest boost track leveling gives a quiet song, and an offset (dB)
+  # added to every song's gain (raise it for a louder station overall).
+  track_gain_max_db: 6.0
+  track_gain_offset_db: 0.0
+  # Older setting: agc: false is the same as leveling: none.
   agc: true
   agc_target_db: -16.0
 

@@ -20,7 +20,7 @@ with reduced processing.
   network outage has no effect on air. The selected playlist falls back to
   the whole library. A watchdog restarts the engine if the output ever goes
   dead while music is coming in, and Docker restarts anything that crashes.
-- **FM processing:** slow AGC, EQ, 4-band compressor, limiter, 15 kHz
+- **FM processing:** per-song level matching, EQ, 4-band compressor, limiter, 15 kHz
   low-pass (protects the 19 kHz stereo pilot), pre-emphasis protection so
   bright songs don't over-deviate the transmitter, and a hard ceiling no
   sample can exceed.
@@ -29,7 +29,7 @@ with reduced processing.
 
 ```
  music share ──► local mirror ──► Liquidsoap engine ──────────────► USB sound card ──► modulator L/R
- (SMB, on host)   (optional)       playlists → fallback → AGC → EQ → multiband
+ (SMB, on host)   (optional)       playlists → fallback → leveling → EQ → multiband
                                    → limiter → 15 kHz LPF → ceiling clip → level
                                         ▲ HTTP (private network)
                                         │
@@ -57,9 +57,9 @@ The modes:
 
 | `processing.mode` | What runs |
 |---|---|
-| `full` | AGC, EQ, 4-band compressor, limiter, protection |
-| `lite` | AGC, EQ, 1-band compressor, limiter, protection |
-| `minimal` | limiter, protection |
+| `full` | leveling, EQ, 4-band compressor, limiter, protection |
+| `lite` | leveling, EQ, 1-band compressor, limiter, protection |
+| `minimal` | limiter, protection (`track` leveling still applies; it costs no CPU while playing) |
 
 "Protection" is everything that keeps the transmitter safe: the 15 kHz
 low-pass, pre-emphasis protection and the hard ceiling. It is in every mode.
@@ -349,9 +349,14 @@ peaks, which is too hot for a sound card with a 2 V RMS output.
 
 Order of the chain, and why each stage is there:
 
-1. **AGC**: slow gain riding (10 s up, 1 s down) toward `agc_target_db`, so
-   quiet 1970s masters and loud modern masters come out similar. It holds
-   its gain during silence and fades, so it won't boost hiss.
+1. **Song leveling** (`leveling`), so quiet 1970s masters and loud modern
+   masters come out similar. On servers (`auto` → `track`) each song plays
+   at one fixed gain from its ReplayGain, read from tags or measured when
+   the song loads, capped at +`track_gain_max_db`; nothing rides the level
+   inside a song. On a Raspberry Pi (`auto` → `agc`) a slow AGC (10 s up,
+   1 s down) toward `agc_target_db` does it instead; it holds its gain
+   during silence and fades, so it won't boost hiss, but it audibly
+   "breathes" on dynamic music.
 2. **High-pass at 30 Hz** (`highpass_hz`; 60 Hz with the `zfmsm-stereo`
    profile): the modulator doesn't pass lower, and sub-bass wastes modulation.
 3. **EQ**: bass (80 Hz), presence (3 kHz), air (10 kHz), per preset.
@@ -367,7 +372,8 @@ Order of the chain, and why each stage is there:
 8. **Pre-emphasis protection** (`preemphasis_us`, see below): the audio is
    treble-boosted exactly as the transmitter will boost it, limited and
    clipped there, then the boost is undone, followed by a second 15 kHz
-   low-pass. Overall: −5.5 dB at 15 kHz, **−100 dB at 19 kHz**.
+   low-pass. Except in low-CPU mode the limiter here acts on the treble
+   only (above 2.5 kHz), so a cymbal doesn't duck the bass and vocals. Overall: −5.5 dB at 15 kHz, **−100 dB at 19 kHz**.
 9. **Safety clip** at `ceiling_db`. Nothing louder reaches the DAC.
 10. **Output level** (the Home Assistant slider), ≤ `max_volume_db`.
 
@@ -472,7 +478,8 @@ in every mode, before the limiter, independent of the presets. A
 Turn it on with `MODULATOR=zfmsm-stereo` (or `processing.modulator` in
 `config.yaml`). Any value it sets can still be overridden in the file. A
 different modulator, sound card, or the ZFMSM in mono mode needs its own
-measurement.
+measurement. In mono mode the ZFMSM appears to use only its left input, so
+set `output.mono: true` to send the full mix to both outputs.
 
 **Measuring.** Record the station with an SDR on the coax (e.g. SDR++), with
 WFM stereo on, the recorder set to stereo, saved as WAV:
