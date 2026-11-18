@@ -9,11 +9,12 @@ a 16/24/32-bit PCM WAV file.
 """
 import sys
 import wave
+from pathlib import Path
 
 import numpy as np
 
-TONES = [30, 50, 80, 125, 200, 315, 500, 800, 1000, 1250, 2000, 3150, 5000, 6300,
-         8000, 10000, 12500, 14000, 15000]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from make_test_signal import TONES  # noqa: E402
 
 
 def read_wav(path):
@@ -51,9 +52,30 @@ def tone_levels(rate, x):
         if spec.max() ** 2 < 0.9 * np.sum(spec ** 2) * 0.5:
             continue
         for f in TONES:
-            if abs(peak - f) <= max(3.0, f * 0.02):
+            if abs(peak - f) <= max(1.5, f * 0.02):
                 best[f] = max(best.get(f, -200.0), 20 * np.log10(rms * np.sqrt(2)))
     return best
+
+
+def stereo_check(rate, x):
+    """Separation during the left-only and right-only 1 kHz tones at the end."""
+    win = int(0.5 * rate)
+    freqs = np.fft.rfftfreq(win, 1 / rate)
+    bin1k = np.argmin(abs(freqs - 1000))
+    diffs = []
+    for start in range(0, len(x) - win, win // 2):
+        seg = x[start:start + win] * np.hanning(win)[:, None]
+        mags = [np.abs(np.fft.rfft(seg[:, c]))[bin1k - 2:bin1k + 3].max() + 1e-9 for c in (0, 1)]
+        if max(mags) > 1e-3 * win:
+            diffs.append(20 * np.log10(mags[0] / mags[1]))
+    if not diffs:
+        return "no 1 kHz tone found for the stereo check"
+    left, right = max(diffs), min(diffs)
+    if left < 6 and right > -6:
+        return "channels are identical: the station, the receiver or the recording is mono"
+    return (f"left-only tone: right channel {left:.0f} dB lower; "
+            f"right-only tone: left channel {-right:.0f} dB lower "
+            "(separation; 30 dB or more is good)")
 
 
 def main(path):
@@ -68,6 +90,8 @@ def main(path):
         print(f"channel {ch + 1}: 1 kHz at {ref:.1f} dBFS peak; other tones relative to it:")
         for f in TONES:
             print(f"  {f:>6} Hz  " + (f"{levels[f] - ref:+6.1f} dB" if f in levels else "   (not found)"))
+    if x.shape[1] == 2:
+        print("stereo:", stereo_check(rate, x))
 
 
 if __name__ == "__main__":
