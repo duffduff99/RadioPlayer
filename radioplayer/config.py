@@ -64,6 +64,28 @@ DEFAULT_PRESETS: dict[str, dict] = {
     },
 }
 
+# Measured transmitter chains. Each sets processing.* values; anything set in
+# config.yaml or the environment wins.
+MODULATOR_PROFILES: dict[str, dict] = {
+    # Blonder Tongue ZFMSM in stereo mode, fed by an AB13X USB sound card.
+    # Measured 2026-11-17 with an SDR on the coax (tools/make_test_signal.py,
+    # no de-emphasis): a resonance of about +14 dB near 100 Hz with heavy
+    # distortion of 40-70 Hz tones, a midrange dip of about 3 dB near 500 Hz,
+    # and pre-emphasis of about 25 us rather than the 75 us US radios undo.
+    # The filters make it measure within 1.5 dB from 80 Hz to 10 kHz as heard
+    # on a radio with 75 us de-emphasis. The bass resonance moved with the
+    # sound card, so re-measure if the sound card changes.
+    "zfmsm-stereo": {
+        "preemphasis_us": 25,
+        "highpass_hz": 60.0,
+        "correction": [
+            {"freq": 110.0, "gain": -13.3, "q": 2.62},
+            {"freq": 455.0, "gain": 4.0, "q": 2.72},
+            {"freq": 8860.0, "gain": 7.2, "q": 0.31},
+        ],
+    },
+}
+
 DEFAULTS: dict[str, Any] = {
     "music": {
         "root": "/mnt/radio",
@@ -98,6 +120,13 @@ DEFAULTS: dict[str, Any] = {
     "processing": {
         "mode": "full",
         "default_preset": "medium",
+        # Named set of measured corrections for a specific modulator (and the
+        # sound card feeding it); see MODULATOR_PROFILES. Its values apply
+        # unless config.yaml or the environment sets them.
+        "modulator": None,
+        # Fixed correction filters for the transmitter chain, applied in every
+        # mode before the limiter: [{freq: Hz, gain: dB, q: width}, ...].
+        "correction": [],
         "preemphasis_us": 75,
         "agc": True,
         "agc_target_db": -16.0,
@@ -277,6 +306,14 @@ def load(path: Path | str | None = None) -> Config:
 
     raw = _merge(DEFAULTS, user)
     _apply_env(raw, os.environ)
+    profile = raw["processing"]["modulator"]
+    if profile:
+        if profile not in MODULATOR_PROFILES:
+            raise ConfigError(f"processing.modulator {profile!r} is not one of: "
+                              f"{', '.join(MODULATOR_PROFILES)}")
+        base = _merge(DEFAULTS, {"processing": MODULATOR_PROFILES[profile]})
+        raw = _merge(base, user)
+        _apply_env(raw, os.environ)
     cfg = Config(raw=raw, path=path)
 
     out = raw["output"]
@@ -303,8 +340,17 @@ def load(path: Path | str | None = None) -> Config:
         raise ConfigError("output.ceiling_db must be between -20 and 0")
 
     proc = raw["processing"]
-    if proc["preemphasis_us"] not in (0, 50, 75):
-        raise ConfigError("processing.preemphasis_us must be 75 (Americas), 50 (Europe/elsewhere) or 0 (off)")
+    if not isinstance(proc["preemphasis_us"], (int, float)) or not 0 <= proc["preemphasis_us"] <= 150:
+        raise ConfigError("processing.preemphasis_us must be a number of microseconds from 0 (off) to 150; "
+                          "75 is standard in the Americas, 50 elsewhere")
+    corr = proc["correction"]
+    if not isinstance(corr, list) or len(corr) > 8:
+        raise ConfigError("processing.correction must be a list of at most 8 filters")
+    for i, f in enumerate(corr):
+        if not isinstance(f, dict) or not all(isinstance(f.get(k), (int, float)) for k in ("freq", "gain", "q")):
+            raise ConfigError(f"processing.correction[{i}] needs numeric freq, gain and q")
+        if not (20 <= f["freq"] <= 16000 and -24 <= f["gain"] <= 12 and 0.1 <= f["q"] <= 10):
+            raise ConfigError(f"processing.correction[{i}]: freq 20-16000 Hz, gain -24 to +12 dB, q 0.1-10")
     if proc["mode"] not in ("full", "lite", "minimal"):
         raise ConfigError("processing.mode must be 'full', 'lite' or 'minimal'")
     xo = proc["crossovers"]

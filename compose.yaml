@@ -13,6 +13,8 @@
 #   MUSIC_ROOT       music folder as seen in the container, e.g. /mnt/radio/Radio
 #   MIRROR           true = copy the library to local disk and play from there
 #   PROCESSING_MODE  full, lite or minimal
+#   MODULATOR        measured corrections for a specific modulator, e.g.
+#                    zfmsm-stereo (see MODULATOR_PROFILES in radioplayer/config.py)
 #
 # Where things are stored:
 #   CONFIG_DIR       host folder holding config.yaml, e.g. /opt/radioplayer
@@ -32,6 +34,7 @@ x-environment: &environment
   RADIOPLAYER__MUSIC__ROOT: ${MUSIC_ROOT:-}
   RADIOPLAYER__MUSIC__MIRROR__ENABLED: ${MIRROR:-}
   RADIOPLAYER__PROCESSING__MODE: ${PROCESSING_MODE:-}
+  RADIOPLAYER__PROCESSING__MODULATOR: ${MODULATOR:-}
 
 x-volumes:
   - &config ${CONFIG_DIR:-config}:/etc/radioplayer

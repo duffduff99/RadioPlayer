@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import cmath
 import concurrent.futures
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -112,12 +114,63 @@ def read_state(cfg: Config) -> dict:
 # Pre-emphasis curve -> (zero time constant in seconds, k) for the emphasis
 # filter in radio.liq. Fitted at 44.1 kHz so the one-pole discrete filter
 # tracks the analog 1 + jw*tau curve within 1 dB from 200 Hz to 15 kHz
-# (the plain values undershoot by ~2 dB near 15 kHz).
+# (the plain values undershoot by ~2 dB near 15 kHz). Other values are
+# fitted on demand by emphasis_fit().
 EMPHASIS_FIT = {
     0: (0.0, 0.0),
     50: (47.7e-6, 80.0),
     75: (76.7e-6, 80.0),
 }
+
+
+def emphasis_fit(us: float) -> tuple[float, float]:
+    """(tau, k) for the emphasis filter that best tracks 1 + jw*us between 200 Hz and 15 kHz."""
+    if us in EMPHASIS_FIT:
+        return EMPHASIS_FIT[us]
+    rate, dt = 44100.0, 1 / 44100.0
+    tau = us * 1e-6
+    freqs = [200 * (15000 / 200) ** (i / 39) for i in range(40)]
+    zs = [cmath.exp(2j * math.pi * f / rate) for f in freqs]
+    ideal = [10 * math.log10(1 + (2 * math.pi * f * tau) ** 2) for f in freqs]
+    best = (float("inf"), tau, 80.0)
+    for step in range(121):
+        tz = tau * (0.8 + 1.7 * step / 120)
+        for k in (4, 6, 8, 10, 12, 15, 20, 25, 30, 40, 60, 80):
+            a = dt / (tz / (1 + k) + dt)
+            err = max(abs(20 * math.log10(abs((1 + k) - k * a / (1 - (1 - a) / z))) - want)
+                      for z, want in zip(zs, ideal))
+            if err < best[0]:
+                best = (err, tz, float(k))
+    return round(best[1], 9), best[2]
+
+
+def peak_gain_db(freq: float, gain: float, q: float, at: float, rate: float = 44100.0) -> float:
+    """Gain at `at` Hz of Liquidsoap's peaking filter (the RBJ cookbook one)."""
+    w0 = 2 * math.pi * freq / rate
+    alpha = math.sin(w0) / (2 * q)
+    a = 10 ** (gain / 40)
+    z = cmath.exp(-1j * 2 * math.pi * at / rate)
+    num = (1 + alpha * a) - 2 * math.cos(w0) * z + (1 - alpha * a) * z * z
+    den = (1 + alpha / a) - 2 * math.cos(w0) * z + (1 - alpha / a) * z * z
+    return 20 * math.log10(abs(num / den))
+
+
+def correction_def(filters: list[dict]) -> str:
+    """Liquidsoap function applying the fixed correction filters.
+
+    The level is compensated so the filters leave 1 kHz unchanged: broad
+    filters lift the whole midrange, which would otherwise push everything
+    harder into the limiter.
+    """
+    lines = ["def rp_correction(s) ="]
+    for f in filters:
+        lines.append(f"  s = filter.iir.eq.peak(frequency={liq_float(f['freq'])}, "
+                     f"q={liq_float(f['q'])}, gain={liq_float(f['gain'])}, s)")
+    makeup = -sum(peak_gain_db(f["freq"], f["gain"], f["q"], 1000.0) for f in filters)
+    if abs(makeup) >= 0.05:
+        lines.append(f"  s = amplify(lin_of_dB({liq_float(round(makeup, 2))}), s)")
+    lines += ["  s", "end"]
+    return "\n".join(lines)
 
 
 # --- Liquidsoap literal helpers ------------------------------------------
@@ -193,6 +246,7 @@ def render(cfg: Config, playlists: list[Playlist], state: dict,
         preset = proc["default_preset"]
 
     profile = ENGINE_PROFILES[cfg.low_cpu]
+    emphasis = emphasis_fit(proc["preemphasis_us"])
     alsa_buffer = out["alsa_buffer_seconds"] or profile["alsa_buffer"]
 
     def pl(p: Playlist) -> str:
@@ -234,8 +288,9 @@ def render(cfg: Config, playlists: list[Playlist], state: dict,
         f"rp_ceiling_db = {liq_float(out['ceiling_db'])}",
         f"rp_crossfade = {liq_float(out['crossfade_seconds'])}",
         f"rp_processing_mode = {liq_str(proc['mode'])}",
-        f"rp_emphasis_tau = {liq_float(EMPHASIS_FIT.get(proc['preemphasis_us'], (0.0, 0.0))[0])}",
-        f"rp_emphasis_k = {liq_float(EMPHASIS_FIT.get(proc['preemphasis_us'], (0.0, 0.0))[1])}",
+        f"rp_emphasis_tau = {liq_float(emphasis[0])}",
+        f"rp_emphasis_k = {liq_float(emphasis[1])}",
+        correction_def(proc["correction"]),
         f"rp_agc = {liq_bool(proc['agc'])}",
         f"rp_agc_target = {liq_float(proc['agc_target_db'])}",
         f"rp_highpass_hz = {liq_float(proc['highpass_hz'])}",

@@ -260,6 +260,47 @@ s = graph_cut(s)
 
 ceiling = lin_of_dB(rp_ceiling_db)
 
+# Measurement sweep: stepped tones 25 dB below the ceiling, for measuring the
+# transmitter chain from a recording. It replaces the music after the
+# AGC/EQ/compressor but before the correction filters and the protection
+# stages, so a recording shows the corrected chain exactly as listeners get
+# it. Low level, so the limiter and pre-emphasis protection stay out of the
+# way even with large correction boosts. Each slot is 2.25 s: 2 s of tone, 0.25 s of silence; 0 means a silent
+# slot. Loops. Only reachable via the CLI/HTTP API.
+sweep_slots = [0., 1000., 1000., 30., 50., 80., 125., 200., 315., 500., 800., 1000.,
+               1250., 2000., 3150., 5000., 6300., 8000., 10000., 12500., 14000.,
+               15000., 0., 0.]
+
+def sweep_position() =
+  t = time() - signal_started()
+  slot = int_of_float(t / 2.25)
+  {index = slot mod list.length(sweep_slots), within = t - float_of_int(slot) * 2.25}
+end
+
+def sweep_frequency() =
+  f = list.nth(sweep_slots, sweep_position().index)
+  if f == 0. then 1000. else f end
+end
+
+def sweep_amplitude() =
+  p = sweep_position()
+  # 25 dB under the ceiling at the DAC whatever the preset: undo the
+  # preset's limiter_drive, which the sweep passes through.
+  if list.nth(sweep_slots, p.index) == 0. or p.within > 2. then 0.
+  else ceiling * lin_of_dB(-25.) / lin_of_dB(p_limiter_drive()) end
+end
+
+sweep = tag("measurement_sweep", sine(amplitude=sweep_amplitude, sweep_frequency))
+s = switch(id="sweep_switch", track_sensitive=false, [
+  ({signal_mode() == "sweep"}, sweep),
+  ({true}, s)
+])
+
+# 5b. Fixed correction filters for the transmitter chain (processing.correction
+#     or a modulator profile), defined in generated.liq. Before the limiter,
+#     so whatever they boost is still limited and protected.
+s = rp_correction(s)
+
 def clip_at(level, s) =
   amplify(level, clip(amplify(1. / level, s)))
 end
@@ -322,43 +363,15 @@ meter_out = s
 #    nothing above the ceiling ever reaches the DAC.
 s = clip_at(ceiling, s)
 
-# Test signals, inserted after processing so nothing alters them; the output
-# trim below still applies. Only reachable via the CLI/HTTP API, not Home
-# Assistant, so they cannot go on air by accident.
-#
-# "tone": a 400 Hz sine exactly at the ceiling, i.e. the loudest the processed
-# audio can ever be, for setting levels with a multimeter (many meters only
-# read AC accurately up to a few hundred Hz).
-#
-# "sweep": stepped tones 20 dB below the ceiling, for measuring the frequency
-# response of the transmitter chain from a recording. Low level because the
-# transmitter boosts treble (pre-emphasis) and must not clip. Each slot is
-# 2.25 s: 2 s of tone, 0.25 s of silence; 0 means a silent slot. Loops.
-sweep_slots = [0., 1000., 1000., 30., 50., 80., 125., 200., 315., 500., 800., 1000.,
-               1250., 2000., 3150., 5000., 6300., 8000., 10000., 12500., 14000.,
-               15000., 0., 0.]
-
-def sweep_position() =
-  t = time() - signal_started()
-  slot = int_of_float(t / 2.25)
-  {index = slot mod list.length(sweep_slots), within = t - float_of_int(slot) * 2.25}
-end
-
-def sweep_frequency() =
-  f = list.nth(sweep_slots, sweep_position().index)
-  if f == 0. then 1000. else f end
-end
-
-def sweep_amplitude() =
-  p = sweep_position()
-  if list.nth(sweep_slots, p.index) == 0. or p.within > 2. then 0. else ceiling * 0.1 end
-end
-
+# Calibration tone: a 400 Hz sine exactly at the ceiling, i.e. the loudest
+# the processed audio can ever be, for setting levels with a multimeter (many
+# meters only read AC accurately up to a few hundred Hz). Inserted after all
+# processing so nothing alters it; the output trim below still applies. Only
+# reachable via the CLI/HTTP API, not Home Assistant, so it cannot go on air
+# by accident.
 tone = tag("calibration_tone", amplify(ceiling, sine(400.)))
-sweep = tag("measurement_sweep", sine(amplitude=sweep_amplitude, sweep_frequency))
-s = switch(id="signal_switch", track_sensitive=false, [
+s = switch(id="tone_switch", track_sensitive=false, [
   ({signal_mode() == "tone"}, tone),
-  ({signal_mode() == "sweep"}, sweep),
   ({true}, s)
 ])
 
