@@ -6,7 +6,7 @@
 Layout (all tones -20 dBFS, both channels unless noted):
     1 s silence, 3 s 1 kHz reference, then 2 s per frequency in TONES with
     0.25 s gaps, 3 s 1 kHz left only, 3 s 1 kHz right only, 5 s silence.
-The engine's `radioplayer signal sweep` plays the same tone steps.
+The engine's `radioplayer signal sweep` plays a coarser subset of these tones.
 """
 import sys
 import wave
@@ -15,8 +15,11 @@ import numpy as np
 
 RATE = 44100
 LEVEL_DB = -20.0
-TONES = [30, 50, 80, 125, 200, 315, 500, 800, 1000, 1250, 2000, 3150, 5000, 6300,
-         8000, 10000, 12500, 14000, 15000]
+# Dense around 40-400 Hz, where modulators' audio stages tend to have bumps,
+# and 1/3-octave-ish in the treble, where pre-emphasis shows.
+TONES = [30, 40, 50, 63, 71, 80, 90, 100, 112, 125, 140, 160, 180, 200, 250, 315,
+         400, 500, 800, 1000, 1250, 2000, 3150, 4000, 5000, 6300, 8000, 10000,
+         12500, 14000, 15000]
 
 
 def tone(freq, seconds):

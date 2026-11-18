@@ -79,7 +79,10 @@ def test_unreachable_share_uses_cache_then_all(tmp_path, library):
     ({"processing": {"crossovers": [800, 150, 5000]}}, "crossovers"),
     ({"processing": {"default_preset": False}}, "default_preset"),
     ({"processing": {"mode": "turbo"}}, "processing.mode"),
-    ({"processing": {"preemphasis_us": 60}}, "preemphasis_us"),
+    ({"processing": {"preemphasis_us": 200}}, "preemphasis_us"),
+    ({"processing": {"modulator": "nope"}}, "not one of"),
+    ({"processing": {"correction": [{"freq": 100, "gain": -40, "q": 1}]}}, "correction"),
+    ({"processing": {"correction": [{"freq": 100}]}}, "correction"),
     ({"processing": {"presets": {"x": {"bands": []}}}}, "bands"),
     ({"processing": {"presets": {"x": {"limiter_drive": 20}}}}, "limiter_drive"),
     ({"music": {"playlists": [{"name": "A #{x}", "folder": "a"}]}}, "unsupported"),
@@ -274,3 +277,61 @@ def test_env_override_unknown_setting(tmp_path, monkeypatch):
     monkeypatch.setenv("RADIOPLAYER__MQTT__HOSTNAME", "x")
     with pytest.raises(ConfigError, match="no such setting mqtt.hostname"):
         write_config(tmp_path, {})
+
+
+def test_modulator_profile(tmp_path, library, monkeypatch):
+    from radioplayer.config import MODULATOR_PROFILES
+    prof = MODULATOR_PROFILES["zfmsm-stereo"]
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "processing": {"modulator": "zfmsm-stereo"}})
+    assert cfg["processing"]["preemphasis_us"] == prof["preemphasis_us"]
+    assert cfg["processing"]["correction"] == prof["correction"]
+    text = render(cfg, resolve_playlists(cfg), {})
+    assert "def rp_correction(s) =" in text
+    assert text.count("filter.iir.eq.peak(") == len(prof["correction"])
+    from radioplayer.generate import peak_gain_db
+    makeup = -sum(peak_gain_db(f["freq"], f["gain"], f["q"], 1000.0) for f in prof["correction"])
+    assert f"amplify(lin_of_dB({round(makeup, 2)}), s)" in text and makeup < 0
+    assert "rp_highpass_hz = 60.0" in text
+    # config.yaml beats the profile, the environment beats both.
+    cfg = write_config(tmp_path, {**base(tmp_path, library),
+                                  "processing": {"modulator": "zfmsm-stereo", "highpass_hz": 40}})
+    assert cfg["processing"]["highpass_hz"] == 40
+    assert cfg["processing"]["preemphasis_us"] == prof["preemphasis_us"]
+    monkeypatch.setenv("RADIOPLAYER__PROCESSING__PREEMPHASIS_US", "75")
+    assert write_config(tmp_path, {"processing": {"modulator": "zfmsm-stereo"}})["processing"]["preemphasis_us"] == 75
+    # The profile can be chosen from the environment too.
+    monkeypatch.delenv("RADIOPLAYER__PROCESSING__PREEMPHASIS_US")
+    monkeypatch.setenv("RADIOPLAYER__PROCESSING__MODULATOR", "zfmsm-stereo")
+    assert write_config(tmp_path, {})["processing"]["preemphasis_us"] == prof["preemphasis_us"]
+
+
+def test_no_correction_by_default(tmp_path, library):
+    cfg = write_config(tmp_path, base(tmp_path, library))
+    text = render(cfg, resolve_playlists(cfg), {})
+    assert "def rp_correction(s) =\n  s\nend" in text
+
+
+@pytest.mark.parametrize("us", [25, 40, 100])
+def test_emphasis_fit_any_value(us):
+    import numpy as np
+    from radioplayer.generate import emphasis_fit
+    sr, dt = 44100, 1 / 44100
+    f = np.linspace(200, 15000, 300)
+    z = np.exp(1j * 2 * np.pi * f / sr)
+    tau_z, k = emphasis_fit(us)
+    a = dt / (tau_z / (1 + k) + dt)
+    got = 20 * np.log10(abs((1 + k) - k * a / (1 - (1 - a) / z)))
+    want = 20 * np.log10(abs(1 + 1j * 2 * np.pi * f * us * 1e-6))
+    assert np.max(abs(got - want)) < 1.2
+
+
+def test_peak_gain_matches_scipy():
+    import numpy as np
+    from scipy.signal import freqz
+    from radioplayer.generate import peak_gain_db
+    sr, f0, g, q = 44100, 8860, 7.2, 0.31
+    w0 = 2 * np.pi * f0 / sr; al = np.sin(w0) / (2 * q); A = 10 ** (g / 40)
+    b = [1 + al * A, -2 * np.cos(w0), 1 - al * A]; a = [1 + al / A, -2 * np.cos(w0), 1 - al / A]
+    for at in (100, 1000, 8860, 15000):
+        _, h = freqz(b, a, worN=[2 * np.pi * at / sr])
+        assert abs(peak_gain_db(f0, g, q, at) - 20 * np.log10(abs(h[0]))) < 0.01

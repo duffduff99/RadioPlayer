@@ -140,6 +140,7 @@ basic setup needs only a few environment variables:
 | `MUSIC_ROOT` | music folder as the container sees it; the share is at `/mnt/radio` | `/mnt/radio/Radio` |
 | `MIRROR` | `true` to play from a local copy (see below) | `true` |
 | `PROCESSING_MODE` | `full`, `lite` or `minimal` | `full` |
+| `MODULATOR` | measured corrections for your modulator, if there is a profile for it (section 8) | `zfmsm-stereo` |
 
 *Stack manager (Dockhand, Portainer, ...):* create a stack from this Git
 repository with compose file `compose.yaml`, and enter the variables above
@@ -351,22 +352,24 @@ Order of the chain, and why each stage is there:
 1. **AGC**: slow gain riding (10 s up, 1 s down) toward `agc_target_db`, so
    quiet 1970s masters and loud modern masters come out similar. It holds
    its gain during silence and fades, so it won't boost hiss.
-2. **High-pass at 30 Hz**: the modulator doesn't pass lower, and sub-bass
-   wastes modulation.
+2. **High-pass at 30 Hz** (`highpass_hz`; 60 Hz with the `zfmsm-stereo`
+   profile): the modulator doesn't pass lower, and sub-bass wastes modulation.
 3. **EQ**: bass (80 Hz), presence (3 kHz), air (10 kHz), per preset.
 4. **4-band compressor** (`full`), with bands at 150 / 800 / 5000 Hz (Linkwitz-Riley
    crossovers, flat ±0.6 dB when bypassed). In `lite`, one wide-band
    compressor instead.
-5. **Limiter** (`limiter_drive` pushes into it, which is what makes "heavy"
+5. **Correction filters** for the transmitter chain (`processing.correction`
+   or a modulator profile, section 8), the same in every mode.
+6. **Limiter** (`limiter_drive` pushes into it, which is what makes "heavy"
    louder), then a **clip** at ceiling −1 dB.
-6. **8th-order low-pass at 15 kHz**, after the clip so clip distortion is
+7. **8th-order low-pass at 15 kHz**, after the clip so clip distortion is
    filtered too.
-7. **Pre-emphasis protection** (`preemphasis_us`, see below): the audio is
+8. **Pre-emphasis protection** (`preemphasis_us`, see below): the audio is
    treble-boosted exactly as the transmitter will boost it, limited and
    clipped there, then the boost is undone, followed by a second 15 kHz
    low-pass. Overall: −5.5 dB at 15 kHz, **−100 dB at 19 kHz**.
-8. **Safety clip** at `ceiling_db`. Nothing louder reaches the DAC.
-9. **Output level** (the Home Assistant slider), ≤ `max_volume_db`.
+9. **Safety clip** at `ceiling_db`. Nothing louder reaches the DAC.
+10. **Output level** (the Home Assistant slider), ≤ `max_volume_db`.
 
 Measured output on synthetic music-like test material (RMS; higher is louder):
 
@@ -417,7 +420,9 @@ Squeezing that to 0 dB would mean limiting bass too, which costs about
 1.5 dB of loudness and audibly clips kick drums, so the chain takes the
 middle ground. The cost is slightly reined-in treble on the brightest
 moments, as on any commercial FM station. If your modulator turns out not to
-pre-emphasize, set `preemphasis_us: 0`.
+pre-emphasize, set `preemphasis_us: 0`. If it applies a non-standard amount
+(the ZFMSM measured about 25 µs), set that value, so treble is protected as
+much as the modulator needs and no more; section 8 shows how to measure it.
 
 For broadcast-grade processing beyond this, Liquidsoap can host
 [Stereo Tool](https://www.stereotool.com/). This image does not support it
@@ -442,22 +447,53 @@ yet: Debian's Liquidsoap is built without the Stereo Tool plugin.
 
 ---
 
-## 8. Measuring the transmitter chain
+## 8. Measuring and correcting the transmitter chain
 
-To set the EQ from measurements instead of by ear, play a known signal and
-record what a receiver gets (ideally an SDR on the coax, with **de-emphasis
-switched off** in the SDR software, saved as WAV or FLAC).
+Modulators are not flat. The ZFMSM this was built for, fed by a small USB
+sound card, measured like this as heard on an ordinary US radio:
 
-- Through the player: `radioplayer signal sweep` plays stepped tones from
-  30 Hz to 15 kHz (2 s each, looping, 1 kHz first) at 20 dB below the
-  ceiling, after all processing. Stop with `radioplayer signal off`.
-- Straight into the modulator (to measure the modulator alone):
-  `python3 tools/make_test_signal.py test.wav` writes the same tones as a
-  file to play from any device.
+| | 30–50 Hz | ~100 Hz | 3–10 kHz |
+|---|---|---|---|
+| Before correction | −11 to −5 dB | **+14 dB**, with heavy distortion of 40–70 Hz | **−4 to −7 dB** |
 
-Comparing the level of each tone in the recording with what was sent gives
-the frequency response, and shows whether the modulator applies
-pre-emphasis.
+The bass resonance moved with the sound card. The treble loss is because
+the modulator's pre-emphasis is about 25 µs, while US radios undo 75 µs.
+
+**Correcting it.** Fixed correction filters (`processing.correction`) apply
+in every mode, before the limiter, independent of the presets. A
+**modulator profile** bundles measured corrections:
+
+- `zfmsm-stereo`: Blonder Tongue ZFMSM in stereo mode with an AB13X USB
+  sound card. It cuts the ~100 Hz resonance, fills a small dip near 500 Hz,
+  lifts the treble, raises the low cut to 60 Hz (below that the modulator
+  distorts) and sets the pre-emphasis protection to the modulator's 25 µs.
+  Predicted result on a radio: within ±1.6 dB from 80 Hz to 10 kHz.
+
+Turn it on with `MODULATOR=zfmsm-stereo` (or `processing.modulator` in
+`config.yaml`). Any value it sets can still be overridden in the file. A
+different modulator, sound card, or the ZFMSM in mono mode needs its own
+measurement.
+
+**Measuring.** Record the station with an SDR on the coax (e.g. SDR++), with
+WFM stereo on, the recorder set to stereo, saved as WAV:
+
+1. *The chain without corrections:* stop the engine container (it holds the
+   sound card), then on the host play the test file through the station's
+   sound card while recording with **de-emphasis off**:
+   ```bash
+   python3 tools/make_test_signal.py test.wav
+   aplay -D plughw:CARD=Audio,DEV=0 test.wav
+   ```
+   Start the engine again afterwards.
+2. *The result as listeners hear it:* with the engine running, record with
+   **75 µs de-emphasis** (like a US radio) while it plays its own sweep:
+   `radioplayer signal sweep`, then `radioplayer signal off`. The sweep
+   passes through the correction filters and protection, 25 dB below the
+   ceiling, so it shows exactly what goes on air.
+
+`python3 tools/analyze_recording.py recording.wav` lists each tone's level
+relative to 1 kHz and the stereo separation. Correction filter values are
+fitted from recording 1; recording 2 should come out flat.
 
 ## 9. Command line
 
@@ -470,7 +506,7 @@ $R volume -6              # dB, clamped to min/max_volume_db
 $R preset heavy
 $R reload                 # re-read all folders now
 $R tone on|off            # calibration tone (ON AIR)
-$R signal sweep|off       # measurement tones, 20 dB below the ceiling (ON AIR)
+$R signal sweep|off       # measurement tones, 25 dB below the ceiling (ON AIR)
 $R sync                   # update the local mirror now (if enabled)
 $R check                  # validate config, list playlists
 $R refresh-emergency --max-mb 2000    # refill the emergency folder (mirror off)
