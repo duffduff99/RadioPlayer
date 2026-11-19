@@ -335,3 +335,29 @@ def test_peak_gain_matches_scipy():
     for at in (100, 1000, 8860, 15000):
         _, h = freqz(b, a, worN=[2 * np.pi * at / sr])
         assert abs(peak_gain_db(f0, g, q, at) - 20 * np.log10(abs(h[0]))) < 0.01
+
+
+def test_leveling(tmp_path, library):
+    def lv(**proc):
+        return write_config(tmp_path, {**base(tmp_path, library), "processing": proc}).leveling
+    assert lv(leveling="track") == "track"
+    assert lv(leveling="none") == "none"
+    assert lv(agc=False) == "none"
+    assert lv(leveling="auto", **{}) in ("track", "agc")
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "engine": {"low_cpu": True}})
+    assert cfg.leveling == "agc"
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "engine": {"low_cpu": False},
+                                  "output": {"mono": True}})
+    assert cfg.leveling == "track"
+    text = render(cfg, resolve_playlists(cfg), {})
+    assert 'rp_leveling = "track"' in text and "rp_mono = true" in text
+    with pytest.raises(ConfigError, match="leveling"):
+        lv(leveling="loud")
+
+
+def test_auto_leveling_on_liquidsoap_22(tmp_path, library):
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "engine": {"low_cpu": False}})
+    assert 'rp_leveling = "agc"' in render(cfg, resolve_playlists(cfg), {}, (2, 2))
+    assert 'rp_leveling = "track"' in render(cfg, resolve_playlists(cfg), {}, (2, 3))
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "processing": {"leveling": "track"}})
+    assert 'rp_leveling = "track"' in render(cfg, resolve_playlists(cfg), {}, (2, 2))

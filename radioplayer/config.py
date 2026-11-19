@@ -111,6 +111,9 @@ DEFAULTS: dict[str, Any] = {
         "device": "plughw:CARD=Headphones,DEV=0",
         "file": "/var/lib/radioplayer/output.wav",
         "alsa_buffer_seconds": None,
+        # Send the same mono mix (left + right) to both outputs, e.g. for a
+        # modulator in mono mode that only uses one of its inputs.
+        "mono": False,
         "default_volume_db": -6.0,
         "min_volume_db": -40.0,
         "max_volume_db": 0.0,
@@ -128,6 +131,18 @@ DEFAULTS: dict[str, Any] = {
         # mode before the limiter: [{freq: Hz, gain: dB, q: width}, ...].
         "correction": [],
         "preemphasis_us": 75,
+        # How song levels are evened out:
+        #   track: each song at one fixed gain from its ReplayGain (tags, or
+        #          measured when the song loads); no level riding inside a song
+        #   agc:   slow automatic gain control that rides the level
+        #   none:  songs play at their mastered level
+        #   auto:  track on PCs/servers, agc on ARM boards (measuring every
+        #          song costs too much CPU on a Raspberry Pi)
+        "leveling": "auto",
+        # Largest boost track leveling may give a quiet song, and an offset
+        # added to every song's gain.
+        "track_gain_max_db": 6.0,
+        "track_gain_offset_db": 0.0,
         "agc": True,
         "agc_target_db": -16.0,
         "highpass_hz": 30.0,
@@ -184,6 +199,16 @@ class Config:
     def play_root(self) -> Path:
         """Where the engine reads music: the local mirror if enabled, else the share."""
         return self.mirror_dir if self.mirror_enabled else Path(self.raw["music"]["root"])
+
+    @property
+    def leveling(self) -> str:
+        proc = self.raw["processing"]
+        value = proc["leveling"]
+        if value == "auto":
+            if not proc["agc"]:
+                return "none"  # older configs turned the AGC off with agc: false
+            return "agc" if self.low_cpu else "track"
+        return value
 
     @property
     def low_cpu(self) -> bool:
@@ -340,6 +365,14 @@ def load(path: Path | str | None = None) -> Config:
         raise ConfigError("output.ceiling_db must be between -20 and 0")
 
     proc = raw["processing"]
+    if proc["leveling"] not in ("auto", "track", "agc", "none"):
+        raise ConfigError("processing.leveling must be auto, track, agc or none")
+    if not 0 <= proc["track_gain_max_db"] <= 20:
+        raise ConfigError("processing.track_gain_max_db must be between 0 and 20")
+    if not -20 <= proc["track_gain_offset_db"] <= 20:
+        raise ConfigError("processing.track_gain_offset_db must be between -20 and 20")
+    if not isinstance(raw["output"]["mono"], bool):
+        raise ConfigError("output.mono must be true or false")
     if not isinstance(proc["preemphasis_us"], (int, float)) or not 0 <= proc["preemphasis_us"] <= 150:
         raise ConfigError("processing.preemphasis_us must be a number of microseconds from 0 (off) to 150; "
                           "75 is standard in the Americas, 50 elsewhere")
