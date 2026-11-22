@@ -47,6 +47,58 @@ cards:
         entity_id: button.fm_radio_player_skip_song
 ```
 
+### As a media player
+
+To show the station as a media player (now playing, skip, playlist as the
+source), add a [universal media player](https://www.home-assistant.io/integrations/universal/)
+to `configuration.yaml`. If you already have a `media_player:` section, add
+the `- platform: universal` entry to it rather than a second `media_player:`
+key. Restart Home Assistant afterwards.
+
+```yaml
+media_player:
+  - platform: universal
+    name: FM Radio
+    unique_id: fm_radio_player_media
+    device_class: receiver
+    # "playing" while the engine is reachable, "off" when it isn't.
+    state_template: >
+      {{ 'off' if states('select.fm_radio_player_playlist') in ['unavailable', 'unknown']
+         else 'playing' }}
+    commands:
+      media_next_track:
+        action: button.press
+        target:
+          entity_id: button.fm_radio_player_skip_song
+      select_source:
+        action: select.select_option
+        target:
+          entity_id: select.fm_radio_player_playlist
+        data:
+          option: "{{ source }}"
+    attributes:
+      media_title: sensor.fm_radio_player_now_playing|title
+      media_artist: sensor.fm_radio_player_now_playing|artist
+      media_album_name: sensor.fm_radio_player_now_playing|album
+      source: select.fm_radio_player_playlist
+      source_list: select.fm_radio_player_playlist|options
+```
+
+Then on a dashboard:
+
+```yaml
+type: media-control
+entity: media_player.fm_radio
+```
+
+The output level is deliberately left out. It sets the transmitter's
+modulation (calibrated in README section 5), not how loud the radios play,
+so a volume slider on a media card would invite turning the station down by
+accident. Use the output level entity for that instead.
+
+Songs without tags have no title, so the card shows no title for them. The
+"Now playing" sensor still shows their file name.
+
 ## 3. Automations
 
 ### Alert when the station is on fallback
