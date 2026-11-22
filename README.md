@@ -357,8 +357,8 @@ Order of the chain, and why each stage is there:
    1 s down) toward `agc_target_db` does it instead; it holds its gain
    during silence and fades, so it won't boost hiss, but it audibly
    "breathes" on dynamic music.
-2. **High-pass at 30 Hz** (`highpass_hz`; 60 Hz with the `zfmsm-stereo`
-   profile): the modulator doesn't pass lower, and sub-bass wastes modulation.
+2. **High-pass at 30 Hz** (`highpass_hz`; 60 Hz with the `zfmsm-*`
+   profiles): the modulator doesn't pass lower, and sub-bass wastes modulation.
 3. **EQ**: bass (80 Hz), presence (3 kHz), air (10 kHz), per preset.
 4. **4-band compressor** (`full`), with bands at 150 / 800 / 5000 Hz (Linkwitz-Riley
    crossovers, flat ±0.6 dB when bypassed). In `lite`, one wide-band
@@ -474,12 +474,17 @@ in every mode, before the limiter, independent of the presets. A
   lifts the treble, raises the low cut to 60 Hz (below that the modulator
   distorts) and sets the pre-emphasis protection to the modulator's 25 µs.
   Predicted result on a radio: within ±1.6 dB from 80 Hz to 10 kHz.
+- `zfmsm-mono`: the same, with the ZFMSM in mono mode (and an RCA ground
+  loop isolator on the audio cable). In mono mode the ZFMSM uses only its
+  left input, so this profile also sets `output.mono: true`, sending the
+  full mix to both outputs. Same resonance and dip; the treble falls off
+  sooner, so the boost is larger, capped at +9 dB. Predicted result on a
+  radio: within ±2.4 dB from 100 Hz to 10 kHz, −9 dB at 12.5 kHz.
 
-Turn it on with `MODULATOR=zfmsm-stereo` (or `processing.modulator` in
+Turn one on with `MODULATOR=zfmsm-mono` (or `processing.modulator` in
 `config.yaml`). Any value it sets can still be overridden in the file. A
-different modulator, sound card, or the ZFMSM in mono mode needs its own
-measurement. In mono mode the ZFMSM appears to use only its left input, so
-set `output.mono: true` to send the full mix to both outputs.
+different modulator or sound card needs its own measurement; so does adding
+or removing anything in the audio path, such as an isolator.
 
 **Measuring.** Record the station with an SDR on the coax (e.g. SDR++), with
 WFM stereo on, the recorder set to stereo, saved as WAV:
