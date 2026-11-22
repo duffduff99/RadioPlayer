@@ -84,6 +84,26 @@ MODULATOR_PROFILES: dict[str, dict] = {
             {"freq": 8860.0, "gain": 7.2, "q": 0.31},
         ],
     },
+    # The same ZFMSM in mono mode, AB13X USB sound card through an RCA
+    # ground loop isolator. Measured 2026-11-22 the same way. In mono mode
+    # the modulator uses only its LEFT input (a right-only tone did not come
+    # through at all), so this profile also sends the mono mix to both
+    # outputs. The main channel has the same ~+12 dB resonance near 115 Hz
+    # and dip near 475 Hz as stereo mode, and rolls the treble off sooner.
+    # The filters make it measure within 2.4 dB from 100 Hz to 10 kHz on a
+    # radio with 75 us de-emphasis. The treble boost is capped at 9 dB (at
+    # 9 kHz), so above 10 kHz it still falls off (-9 dB at 12.5 kHz) rather
+    # than feeding more treble into the pre-emphasis limiter.
+    "zfmsm-mono": {
+        "preemphasis_us": 25,
+        "highpass_hz": 60.0,
+        "correction": [
+            {"freq": 115.0, "gain": -12.6, "q": 2.01},
+            {"freq": 475.0, "gain": 5.1, "q": 3.65},
+            {"freq": 9000.0, "gain": 9.0, "q": 0.38},
+        ],
+        "output": {"mono": True},
+    },
 }
 
 DEFAULTS: dict[str, Any] = {
@@ -336,7 +356,10 @@ def load(path: Path | str | None = None) -> Config:
         if profile not in MODULATOR_PROFILES:
             raise ConfigError(f"processing.modulator {profile!r} is not one of: "
                               f"{', '.join(MODULATOR_PROFILES)}")
-        base = _merge(DEFAULTS, {"processing": MODULATOR_PROFILES[profile]})
+        prof = dict(MODULATOR_PROFILES[profile])
+        # A profile's "output" entry sets output settings (e.g. mono); the
+        # rest are processing settings.
+        base = _merge(DEFAULTS, {"processing": prof, "output": prof.pop("output", {})})
         raw = _merge(base, user)
         _apply_env(raw, os.environ)
     cfg = Config(raw=raw, path=path)

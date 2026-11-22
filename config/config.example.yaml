@@ -123,6 +123,7 @@ processing:
   # MODULATOR_PROFILES in radioplayer/config.py. Sets preemphasis_us,
   # highpass_hz and correction below unless you set them yourself.
   #   zfmsm-stereo  Blonder Tongue ZFMSM in stereo mode, AB13X USB sound card
+  #   zfmsm-mono    the same in mono mode; also sets output.mono: true
   modulator: null
 
   # Fixed correction filters for the transmitter chain, applied in every

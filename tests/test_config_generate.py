@@ -305,6 +305,20 @@ def test_modulator_profile(tmp_path, library, monkeypatch):
     assert write_config(tmp_path, {})["processing"]["preemphasis_us"] == prof["preemphasis_us"]
 
 
+def test_mono_modulator_profile(tmp_path, library):
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "processing": {"modulator": "zfmsm-mono"}})
+    assert cfg["output"]["mono"] is True
+    assert "rp_mono = true" in render(cfg, resolve_playlists(cfg), {})
+    # config.yaml can still turn it off, and the stereo profile leaves it off.
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "processing": {"modulator": "zfmsm-mono"},
+                                  "output": {"mono": False}})
+    assert cfg["output"]["mono"] is False
+    cfg = write_config(tmp_path, {**base(tmp_path, library), "processing": {"modulator": "zfmsm-stereo"}})
+    assert cfg["output"]["mono"] is False
+    from radioplayer.config import MODULATOR_PROFILES
+    assert MODULATOR_PROFILES["zfmsm-mono"]["output"] == {"mono": True}  # not consumed by load()
+
+
 def test_no_correction_by_default(tmp_path, library):
     cfg = write_config(tmp_path, base(tmp_path, library))
     text = render(cfg, resolve_playlists(cfg), {})

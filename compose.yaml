@@ -14,7 +14,7 @@
 #   MIRROR           true = copy the library to local disk and play from there
 #   PROCESSING_MODE  full, lite or minimal
 #   MODULATOR        measured corrections for a specific modulator, e.g.
-#                    zfmsm-stereo (see MODULATOR_PROFILES in radioplayer/config.py)
+#                    zfmsm-stereo or zfmsm-mono (see MODULATOR_PROFILES in radioplayer/config.py)
 #
 # Where things are stored:
 #   CONFIG_DIR       host folder holding config.yaml, e.g. /opt/radioplayer
