@@ -51,20 +51,26 @@ cards:
 
 To show the station as a media player (now playing, skip, playlist as the
 source), add a [universal media player](https://www.home-assistant.io/integrations/universal/)
-to `configuration.yaml`. If you already have a `media_player:` section, add
-the `- platform: universal` entry to it rather than a second `media_player:`
-key. Restart Home Assistant afterwards.
+to `configuration.yaml`. If you already have a `media_player:` or `template:` section,
+add the entries to it rather than a second key with the same name. The card
+shows the song and the skip button only while the state is `playing`, which
+the template sensor provides. Restart Home Assistant afterwards.
 
 ```yaml
+template:
+  - sensor:
+      # "playing" while the engine is reachable, "off" when it isn't.
+      - name: FM Radio state
+        unique_id: fm_radio_player_media_state
+        state: >
+          {{ 'off' if states('select.fm_radio_player_playlist') in ['unavailable', 'unknown']
+             else 'playing' }}
+
 media_player:
   - platform: universal
     name: FM Radio
     unique_id: fm_radio_player_media
     device_class: receiver
-    # "playing" while the engine is reachable, "off" when it isn't.
-    state_template: >
-      {{ 'off' if states('select.fm_radio_player_playlist') in ['unavailable', 'unknown']
-         else 'playing' }}
     commands:
       media_next_track:
         action: button.press
@@ -77,6 +83,7 @@ media_player:
         data:
           option: "{{ source }}"
     attributes:
+      state: sensor.fm_radio_state
       media_title: sensor.fm_radio_player_now_playing|title
       media_artist: sensor.fm_radio_player_now_playing|artist
       media_album_name: sensor.fm_radio_player_now_playing|album
